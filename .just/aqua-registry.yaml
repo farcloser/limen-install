@@ -1,0 +1,10 @@
+# DO NOT EDIT MANUALLY.
+# This file is common to all projects and managed by limen.
+# Most tools can be installed directly from aqua registry without local overrides.
+# Addition of non-standard tools can be discussed on https://github.com/farcloser/limen
+
+packages:
+  - type: go_install
+    path: github.com/google/go-licenses
+    description: Report on the licenses of a Go project's dependencies
+    version_source: github_tag
