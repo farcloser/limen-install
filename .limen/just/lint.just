@@ -33,6 +33,14 @@ mod homebrew 'lint-homebrew.just'
 limen: (_banner "lint" "limen")
     ${LIMEN_BIN:-limen} check .
 
+# GitHub settings audit — `limen github check` against this repository
+# (inferred from origin), or any target the subcommand takes
+# (`just do lint github -org farcloser`). Named, never in the default set: it
+# needs the network and an authed gh, and its subject is the live GitHub
+# state, not the tree. Same LIMEN_BIN override as `lint limen`.
+github *args: (_banner "lint" "github")
+    ${LIMEN_BIN:-limen} github check {{ args }}
+
 just: (_banner "lint" "just")
     #!/usr/bin/env bash
     set -euo pipefail
@@ -137,12 +145,12 @@ links: (_banner "lint" "links")
     set -euo pipefail
     # A directory input (not a glob) is what makes lychee honor .gitignore/hidden.
     # Canonical exclusions (and their rationale) live in .limen/lychee.toml; a
-    # repository adds its own in a root lychee.toml. Both must be passed
+    # repository adds its own in a root .lychee.toml. Both must be passed
     # explicitly — any --config disables lychee's ./lychee.toml auto-discovery —
     # and lychee merges them, concatenating the exclude lists.
     args=(--config .limen/lychee.toml)
-    if [ -f lychee.toml ]; then
-        args+=(--config lychee.toml)
+    if [ -f .lychee.toml ]; then
+        args+=(--config .lychee.toml)
     fi
     lychee --no-progress "${args[@]}" .
 
@@ -157,9 +165,9 @@ commits range="": (_banner "lint" "commits")
     # below verify signatures — this is convenience wiring, not enforcement.
     # See https://github.com/andyfeller/gh-ssh-allowed-signers for automation
     # to retrieve contributor keys.
-    if [ -f .limen/allowed_signers ]; then
+    if [ -f .allowed_signers ]; then
         git config --unset-all gpg.ssh.allowedSignersFile 2>/dev/null || true
-        git config --add gpg.ssh.allowedSignersFile .limen/allowed_signers
+        git config --add gpg.ssh.allowedSignersFile .allowed_signers
     fi
     range="{{ range }}"
     if [ -z "$range" ] && [ -n "${GITHUB_BASE_REF:-}" ]; then
