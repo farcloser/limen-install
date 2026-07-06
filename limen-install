@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 #
-# dotaqua-bootstrap — set up / update a dev machine's global aqua toolchain.
-# The global toolchain is ONE tool: the project scaffolder. Its config is
-# embedded below — no separate config repo, no fetch.
+# limen-install — set up / update a dev machine's global aqua toolchain.
+# The global toolchain is ONE tool: limen, the project scaffolder, installed
+# from farcloser/limen's GitHub releases through the local aqua registry
+# embedded below — no separate config repo, no fetch. (A GITHUB_TOKEN is not
+# required, but is honored when set — useful against API rate limits, and the
+# same wiring will serve any future private tool.)
 #
 # Per-project setup is separate: `aqua policy allow && aqua i -l` inside a repo.
 
@@ -11,13 +14,48 @@ set -euo pipefail
 readonly AQUA_INSTALLER_VERSION="v4.0.2"
 readonly AQUA_INSTALLER_SHA256="98b883756cdd0a6807a8c7623404bfc3bc169275ad9064dc23a6e24ad398f43d"
 
+# The default locations, kept in UNEXPANDED form: this exact text goes into the
+# shell rc, so the rc keeps tracking $HOME / XDG_CONFIG_HOME at shell startup
+# (and survives dotfile syncs across machines) instead of freezing today's
+# absolute paths. The script evaluates them for its own use below.
+# shellcheck disable=SC2016
+readonly CONFIG_EXPR='${XDG_CONFIG_HOME:-$HOME/.config}/aqua/aqua.yaml'
+# shellcheck disable=SC2016
+readonly POLICY_EXPR='${XDG_CONFIG_HOME:-$HOME/.config}/aqua/aqua-policy.yaml'
+
 # Overridable for ONE reason: this is aqua's OWN env var. If aqua is already told
 # where its global config lives, we must write the file there so aqua reads it.
 # Exported once here so `aqua` (a child process) inherits it everywhere below.
+# The preset is remembered: when set, the rc must carry the actual custom path —
+# the default expression above would point at files that are not there.
+AQUA_GLOBAL_CONFIG_PRESET="${AQUA_GLOBAL_CONFIG:-}"
+readonly AQUA_GLOBAL_CONFIG_PRESET
 export AQUA_GLOBAL_CONFIG="${AQUA_GLOBAL_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/aqua/aqua.yaml}"
+CONFIG_DIR="$(dirname "$AQUA_GLOBAL_CONFIG")"
+readonly CONFIG_DIR
+readonly POLICY_FILE="$CONFIG_DIR/aqua-policy.yaml"
 
-# shellcheck disable=SC2016
-readonly AQUA_BIN_EXPR='${AQUA_ROOT_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/aquaproj-aqua}/bin'
+# The global policy must be visible to EVERY aqua invocation — aqua enforces
+# policy at exec time, not just install time, so without this even running
+# `limen` fails with "this package isn't allowed". Appended, never assigned:
+# aqua accepts a colon-separated list, and per-project policies prepend theirs.
+export AQUA_POLICY_CONFIG="$POLICY_FILE${AQUA_POLICY_CONFIG:+:$AQUA_POLICY_CONFIG}"
+
+# On Windows (git-bash), aqua and its installer root at %LOCALAPPDATA%
+# (= $HOME/AppData/Local), not XDG's ~/.local/share — align with aqua's own
+# convention rather than pinning against it. That is the ONLY windows
+# accommodation needed: git-bash converts POSIX-form env values (paths and
+# even colon-lists) to native form when spawning native binaries, so the
+# config/policy exports above reach aqua.exe correctly as they are.
+case "$OSTYPE" in
+  msys*|cygwin*)
+    # shellcheck disable=SC2016
+    AQUA_BIN_EXPR='${AQUA_ROOT_DIR:-$HOME/AppData/Local/aquaproj-aqua}/bin' ;;
+  *)
+    # shellcheck disable=SC2016
+    AQUA_BIN_EXPR='${AQUA_ROOT_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/aquaproj-aqua}/bin' ;;
+esac
+readonly AQUA_BIN_EXPR
 
 SHELL_CHANGED=0   # set to 1 if we modify the shell rc (→ advise opening a new shell)
 
@@ -25,9 +63,16 @@ log() { printf '› %s\n' "$*"; }
 ok()  { printf '✓ %s\n' "$*"; }
 err() { printf '✗ %s\n' "$*" >&2; }
 
-verify_sha256() {  # $1=file $2=expected ; shasum ships on macOS + mainstream Linux
-  echo "$2  $1" | shasum -a 256 -c - >/dev/null 2>&1 \
-    || { err "checksum mismatch: ${1##*/}"; exit 1; }
+verify_sha256() {  # $1=file $2=expected
+  # No single digest tool exists everywhere: linux and windows git-bash ship
+  # coreutils sha256sum, macOS ships perl shasum.
+  if command -v sha256sum >/dev/null 2>&1; then
+    echo "$2  $1" | sha256sum -c - >/dev/null 2>&1 \
+      || { err "checksum mismatch: ${1##*/}"; exit 1; }
+  else
+    echo "$2  $1" | shasum -a 256 -c - >/dev/null 2>&1 \
+      || { err "checksum mismatch: ${1##*/}"; exit 1; }
+  fi
 }
 
 install_aqua() {
@@ -49,38 +94,103 @@ ensure_shell_config() {
     bash) rc="$HOME/.bashrc" ;;
     *)    rc="$HOME/.profile" ;;
   esac
-  if ! grep -qF 'aquaproj-aqua/bin' "$rc" 2>/dev/null; then
+  # Guard with the exact literal we write (grep -F): the expression contains a
+  # "}" between "aquaproj-aqua" and "/bin", so any looser hand-written pattern
+  # silently never matches and the block gets re-appended on every run.
+  if ! grep -qF "$AQUA_BIN_EXPR" "$rc" 2>/dev/null; then
     # shellcheck disable=SC2016
     printf '\n# aqua\nexport PATH="%s:$PATH"\n' "$AQUA_BIN_EXPR" >> "$rc"
     SHELL_CHANGED=1
   fi
+  # Default install → write the unexpanded expressions (rc stays $HOME/XDG
+  # relative); preset AQUA_GLOBAL_CONFIG → write the actual custom paths.
+  local config_value="$CONFIG_EXPR" policy_value="$POLICY_EXPR"
+  if [ -n "$AQUA_GLOBAL_CONFIG_PRESET" ]; then
+    config_value="$AQUA_GLOBAL_CONFIG"
+    policy_value="$POLICY_FILE"
+  fi
   if ! grep -qF 'AQUA_GLOBAL_CONFIG' "$rc" 2>/dev/null; then
-    printf 'export AQUA_GLOBAL_CONFIG="%s"\n' "$AQUA_GLOBAL_CONFIG" >> "$rc"
+    printf 'export AQUA_GLOBAL_CONFIG="%s"\n' "$config_value" >> "$rc"
+    SHELL_CHANGED=1
+  fi
+  if ! grep -qF 'AQUA_POLICY_CONFIG' "$rc" 2>/dev/null; then
+    # Appended, never assigned (see the export above) — a plain assignment here
+    # would clobber per-project policies, or be clobbered by them.
+    # shellcheck disable=SC2016
+    printf 'export AQUA_POLICY_CONFIG="%s${AQUA_POLICY_CONFIG:+:$AQUA_POLICY_CONFIG}"\n' "$policy_value" >> "$rc"
     SHELL_CHANGED=1
   fi
   eval "export PATH=\"$(eval echo "$AQUA_BIN_EXPR"):\$PATH\""
 }
 
-# The entire global config, inlined. Bump the scaffolder version here.
+# The entire global setup, inlined: config, registry, policy. Bump the
+# scaffolder version in the config below.
 write_config() {
-  mkdir -p "$(dirname "$AQUA_GLOBAL_CONFIG")"
+  mkdir -p "$CONFIG_DIR"
+
   cat > "$AQUA_GLOBAL_CONFIG" <<'YAML'
 ---
-# Global aqua config — the project scaffolder, nothing else.
+# Global aqua config — limen, the project scaffolder, nothing else.
+# Written by limen-install; edits are overwritten on the next run.
 checksum:
   enabled: true
+  require_checksum: true
 registries:
-  - type: standard
-    ref: v4.530.0 # renovate: depName=aquaproj/aqua-registry
+  - name: farcloser
+    type: local
+    path: registry.yaml
 packages:
-  - name: farcloser/limen@v0.0.1 # renovate: depName=farcloser/limen
+  # TODO: bump to v0.0.1 once the first real release is cut.
+  - name: farcloser/limen@v0.0.0-test.5 # renovate: depName=farcloser/limen
+    registry: farcloser
 YAML
-  ok "global config written: ${AQUA_GLOBAL_CONFIG}"
+
+  # The registry entry mirrors what goreleaser publishes: per-platform tar.gz
+  # archives named limen_<version>_<os>_<arch>.tar.gz plus a checksums.txt that
+  # aqua pins from (see update-checksum below).
+  cat > "$CONFIG_DIR/registry.yaml" <<'YAML'
+---
+# Written by limen-install; edits are overwritten on the next run.
+packages:
+  - type: github_release
+    repo_owner: farcloser
+    repo_name: limen
+    description: Verify a repository against Farcloser engineering rules
+    asset: limen_{{trimV .Version}}_{{.OS}}_{{.Arch}}.tar.gz
+    format: tar.gz
+    files:
+      - name: limen
+    checksum:
+      type: github_release
+      asset: checksums.txt
+      algorithm: sha256
+    supported_envs:
+      - darwin
+      - linux
+      - windows
+YAML
+
+  cat > "$POLICY_FILE" <<'YAML'
+---
+# Written by limen-install; edits are overwritten on the next run.
+registries:
+  - name: farcloser
+    type: local
+    path: registry.yaml
+packages:
+  - registry: farcloser
+YAML
+
+  ok "global config written: ${CONFIG_DIR} (aqua.yaml, registry.yaml, aqua-policy.yaml)"
 }
 
 install_tools() {
-  aqua i -a
-  ok "scaffolder ready"
+  # Trust the (freshly written) policy, non-interactively.
+  aqua policy allow "$POLICY_FILE"
+  # Pin the release checksums (from goreleaser's checksums.txt) into
+  # aqua-checksums.json next to the global config, then install and verify.
+  (cd "$CONFIG_DIR" && aqua --log-level warn update-checksum && aqua --log-level warn i -a)
+  ok "scaffolder ready: $(limen version 2>/dev/null || echo 'open a new shell, then run: limen version')"
 }
 
 # One idempotent path — safe on a fresh machine AND as an update. Each step
