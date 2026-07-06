@@ -3,3 +3,4 @@
 import '.limen/just/main.just'
 
 lint: do::lint::default
+test:
