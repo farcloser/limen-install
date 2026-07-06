@@ -28,5 +28,21 @@
       ],
       datasourceTemplate: "github-releases",
     },
+    // The limen-install script pins aquaproj/aqua-installer (version + sha256
+    // of the installer script), keyed on the same marker comment. This only
+    // bumps the version: the sha256 that must change with it is recomputed on
+    // Renovate's branches by update-installer-checksum.yaml — without that
+    // workflow this manager would produce PRs that fail checksum verification.
+    // (The same pin in .github/actions/setup-aqua is deliberately NOT managed
+    // here: that file is limen-canonical, pinned byte-for-byte, and moves
+    // through limen baseline releases.)
+    {
+      customType: "regex",
+      managerFilePatterns: ["/^limen-install$/"],
+      matchStrings: [
+        "# renovate: depName=(?<depName>[^\\s]+)\\n\\s*readonly AQUA_INSTALLER_VERSION=\"(?<currentValue>[^\"]+)\"",
+      ],
+      datasourceTemplate: "github-releases",
+    },
   ],
 }

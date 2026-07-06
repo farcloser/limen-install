@@ -51,28 +51,28 @@
       "algorithm": "sha256"
     },
     {
-      "id": "github_release/github.com/farcloser/limen/v0.0.0-test.5/limen_0.0.0-test.5_darwin_amd64.tar.gz",
-      "checksum": "8A7982810D3296B90C0A033914ACEA45F02AD077EF3FE7A91128DDA17FC033DE",
+      "id": "github_release/github.com/farcloser/limen/v0.0.0-test.8/limen_0.0.0-test.8_darwin_amd64.tar.gz",
+      "checksum": "0A5DA0EFE10DF07B77C0979955FEE7A2943CEE5D2581D53C965CD88BD317101E",
       "algorithm": "sha256"
     },
     {
-      "id": "github_release/github.com/farcloser/limen/v0.0.0-test.5/limen_0.0.0-test.5_darwin_arm64.tar.gz",
-      "checksum": "EA138F2B37484CF373FA9237AA956A1E14BE3BABC1410D0772F4FF4FA7F93230",
+      "id": "github_release/github.com/farcloser/limen/v0.0.0-test.8/limen_0.0.0-test.8_darwin_arm64.tar.gz",
+      "checksum": "0B07BA3FC6E89D58A3F230F0A2513B6B2E55FF50B94D83DC3F7708E865F2A7B5",
       "algorithm": "sha256"
     },
     {
-      "id": "github_release/github.com/farcloser/limen/v0.0.0-test.5/limen_0.0.0-test.5_linux_amd64.tar.gz",
-      "checksum": "5AD84D15A6B818B6769D2A518EA77AC3EA2A9BC5189B31DA6F95DE004838F10D",
+      "id": "github_release/github.com/farcloser/limen/v0.0.0-test.8/limen_0.0.0-test.8_linux_amd64.tar.gz",
+      "checksum": "1D6CA0E666E3647E422669369FAB575F1F8686B92A8E92A5D514BAB1301CA55F",
       "algorithm": "sha256"
     },
     {
-      "id": "github_release/github.com/farcloser/limen/v0.0.0-test.5/limen_0.0.0-test.5_linux_arm64.tar.gz",
-      "checksum": "1F24BC0F8902B3C528285D652B41CB96257C5B6068ED3AEE813FEF7F229BEF56",
+      "id": "github_release/github.com/farcloser/limen/v0.0.0-test.8/limen_0.0.0-test.8_linux_arm64.tar.gz",
+      "checksum": "B1494FEA72A056F4483B2D45454F1129194E2330070564E12594A6436DC9015D",
       "algorithm": "sha256"
     },
     {
-      "id": "github_release/github.com/farcloser/limen/v0.0.0-test.5/limen_0.0.0-test.5_windows_amd64.tar.gz",
-      "checksum": "46F4B28B911C696A96971E3023B055EE97E780CD54B957FCE8B760C15B7EDB94",
+      "id": "github_release/github.com/farcloser/limen/v0.0.0-test.8/limen_0.0.0-test.8_windows_amd64.tar.gz",
+      "checksum": "D241EDBF7140238A03977FF7B55324A760F4CE84E1B9CE980194015FEB19B58B",
       "algorithm": "sha256"
     },
     {

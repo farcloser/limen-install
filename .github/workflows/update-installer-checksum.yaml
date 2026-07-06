@@ -1,0 +1,75 @@
+# The other half of Renovate for THIS repository's aqua-installer pin: the
+# bot bumps AQUA_INSTALLER_VERSION in ./limen-install (see renovate.json5)
+# but cannot recompute the sha256 of the installer script that must change
+# with it, so this workflow pushes the fix-up commit onto Renovate's
+# branches. The canonical update-aqua-checksum workflow cannot carry this
+# step — it is limen-pinned, byte-for-byte and repo-agnostic — so this
+# repo-specific twin follows its hardening doctrine instead:
+#   - `push:` on the branch prefix, never pull_request_target: it runs in
+#     the repo's own context, on branches only writers (the Renovate app)
+#     can create.
+#   - The checkout keeps no credential, and the update step runs with no
+#     secrets in its environment; it only downloads and hashes the one
+#     artifact the branch already declares.
+#   - The push step runs only git, with the token scoped to that single step.
+#   - The branch name reaches the shell via env, never template interpolation
+#     (script-injection hygiene).
+#   - No loop: a push made with the default GITHUB_TOKEN triggers no further
+#     workflows — and the no-change early exit terminates recursion
+#     regardless.
+# Both fix-up workflows fire on renovate/** with disjoint writers (that one
+# never touches ./limen-install; this one touches nothing else), so their
+# pushes can only collide on a grouped branch bumping both — the loser fails,
+# and Renovate's next rebase retriggers it.
+name: update-installer-checksum
+
+on:
+  push:
+    branches: ["renovate/**"]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Recompute the aqua-installer sha256 for the pinned version
+        run: |
+          version="$(sed -n 's/^readonly AQUA_INSTALLER_VERSION="\(.*\)"$/\1/p' limen-install)"
+          [ -n "$version" ] || { echo "could not extract AQUA_INSTALLER_VERSION from ./limen-install" >&2; exit 1; }
+          tmp="$(mktemp -d)"
+          curl --proto '=https' --tlsv1.2 -fsSL -o "${tmp}/aqua-installer" \
+            "https://raw.githubusercontent.com/aquaproj/aqua-installer/${version}/aqua-installer"
+          sha="$(sha256sum "${tmp}/aqua-installer" | cut -d' ' -f1)"
+          rm -rf "${tmp}"
+          sed -i "s/^readonly AQUA_INSTALLER_SHA256=\".*\"$/readonly AQUA_INSTALLER_SHA256=\"${sha}\"/" limen-install
+
+      - name: Push the update, if any
+        env:
+          BRANCH: ${{ github.ref_name }}
+          TOKEN: ${{ secrets.UPDATE_AQUA_CHECKSUM_TOKEN || github.token }}
+        run: |
+          [ -z "$(git status --porcelain)" ] && { echo "installer checksum already in sync"; exit 0; }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add limen-install
+          # Signed-off-by: `just do lint commits` enforces DCO on the PR range,
+          # bot commits included.
+          git commit -m "chore: recompute the aqua-installer checksum" \
+            -m "Signed-off-by: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"
+          git push "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:${BRANCH}"

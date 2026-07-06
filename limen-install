@@ -11,6 +11,10 @@
 
 set -euo pipefail
 
+# The version is Renovate-managed (see renovate.json5); the sha256 of the
+# installer script, which must change with it, is recomputed on Renovate's
+# branches by update-installer-checksum.yaml — the pair always moves together.
+# renovate: depName=aquaproj/aqua-installer
 readonly AQUA_INSTALLER_VERSION="v4.0.2"
 readonly AQUA_INSTALLER_SHA256="98b883756cdd0a6807a8c7623404bfc3bc169275ad9064dc23a6e24ad398f43d"
 
@@ -79,7 +83,7 @@ install_aqua() {
   command -v aqua >/dev/null 2>&1 && { ok "aqua present"; return; }
   log "installing aqua ${AQUA_INSTALLER_VERSION}"
   local t; t="$(mktemp -d)"
-  curl -fsSL -o "$t/i" \
+  curl --proto '=https' --tlsv1.2 -fsSL -o "$t/i" \
     "https://raw.githubusercontent.com/aquaproj/aqua-installer/${AQUA_INSTALLER_VERSION}/aqua-installer"
   verify_sha256 "$t/i" "$AQUA_INSTALLER_SHA256"
   chmod +x "$t/i"; "$t/i"; rm -rf "$t"
@@ -141,7 +145,7 @@ registries:
     path: registry.yaml
 packages:
   # TODO: bump to v0.0.1 once the first real release is cut.
-  - name: farcloser/limen@v0.0.0-test.5 # renovate: depName=farcloser/limen
+  - name: farcloser/limen@v0.0.0-test.8 # renovate: depName=farcloser/limen
     registry: farcloser
 YAML
 
