@@ -18,6 +18,13 @@ set -euo pipefail
 readonly AQUA_INSTALLER_VERSION="v4.0.2"
 readonly AQUA_INSTALLER_SHA256="98b883756cdd0a6807a8c7623404bfc3bc169275ad9064dc23a6e24ad398f43d"
 
+# aqua itself, pinned like every other tool and matching the canonical CI
+# action (setup-aqua) — dev machines and CI run the same aqua. No checksum
+# companion here: the checksum-verified installer above performs the download
+# through its own verified bootstrap. Renovate-managed (see renovate.json5).
+# renovate: depName=aquaproj/aqua
+readonly AQUA_VERSION="v2.60.1"
+
 # The default locations, kept in UNEXPANDED form: this exact text goes into the
 # shell rc, so the rc keeps tracking $HOME / XDG_CONFIG_HOME at shell startup
 # (and survives dotfile syncs across machines) instead of freezing today's
@@ -80,15 +87,22 @@ verify_sha256() {  # $1=file $2=expected
 }
 
 install_aqua() {
-  command -v aqua >/dev/null 2>&1 && { ok "aqua present"; return; }
-  log "installing aqua ${AQUA_INSTALLER_VERSION}"
+  if command -v aqua >/dev/null 2>&1; then
+    # Converge, do not skip: a re-run moves an existing aqua to the pin —
+    # without this the version would stay frozen at whatever the machine got
+    # first (this script is the update path too).
+    aqua --log-level warn update-aqua "$AQUA_VERSION"
+    ok "aqua ${AQUA_VERSION}"
+    return
+  fi
+  log "installing aqua ${AQUA_VERSION} (installer ${AQUA_INSTALLER_VERSION})"
   local t; t="$(mktemp -d)"
   curl --proto '=https' --tlsv1.2 -fsSL -o "$t/i" \
     "https://raw.githubusercontent.com/aquaproj/aqua-installer/${AQUA_INSTALLER_VERSION}/aqua-installer"
   verify_sha256 "$t/i" "$AQUA_INSTALLER_SHA256"
-  chmod +x "$t/i"; "$t/i"; rm -rf "$t"
+  chmod +x "$t/i"; "$t/i" -v "$AQUA_VERSION"; rm -rf "$t"
   eval "export PATH=\"$(eval echo "$AQUA_BIN_EXPR"):\$PATH\""
-  ok "aqua installed"
+  ok "aqua ${AQUA_VERSION} installed"
 }
 
 ensure_shell_config() {
@@ -167,6 +181,18 @@ packages:
       type: github_release
       asset: checksums.txt
       algorithm: sha256
+      # Signature doctrine: verify whenever upstream publishes. The release
+      # signs checksums.txt keyless from CI; the identity is the release
+      # workflow at the exact tag, so a bundle signed by anything else fails.
+      cosign:
+        bundle:
+          type: github_release
+          asset: checksums.txt.sigstore.json
+        opts:
+          - --certificate-identity
+          - https://github.com/farcloser/limen/.github/workflows/release.yaml@refs/tags/{{.Version}}
+          - --certificate-oidc-issuer
+          - https://token.actions.githubusercontent.com
     supported_envs:
       - darwin
       - linux
@@ -192,7 +218,7 @@ install_tools() {
   aqua policy allow "$POLICY_FILE"
   # Pin the release checksums (from goreleaser's checksums.txt) into
   # aqua-checksums.json next to the global config, then install and verify.
-  (cd "$CONFIG_DIR" && aqua --log-level warn update-checksum && aqua --log-level warn i -a)
+  (cd "$CONFIG_DIR" && aqua --log-level warn update-checksum --prune && aqua --log-level warn i -a)
   ok "scaffolder ready: $(limen version 2>/dev/null || echo 'open a new shell, then run: limen version')"
 }
 

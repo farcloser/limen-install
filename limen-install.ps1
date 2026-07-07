@@ -82,6 +82,26 @@ if ($actual -ne $GitSha256[$arch]) {
 }
 Ok 'checksum verified'
 
+# Signature doctrine: verify whenever upstream publishes. Git for Windows
+# installers are Authenticode-signed (Microsoft ID Verified, via Trusted
+# Signing); Get-AuthenticodeSignature does the cryptographic work -- hash
+# match plus chain to a trusted root -- and the subject pin ties the
+# certificate to the Git for Windows maintainer's verified identity instead
+# of accepting any validly-signed binary. Unlike the sha256 above, the signer
+# is stable across releases -- no bump needed on version moves.
+$sig = Get-AuthenticodeSignature -FilePath $installer
+if ($sig.Status -ne 'Valid') {
+    Err "Authenticode signature is '$($sig.Status)': $asset"
+    Remove-Item -Force $installer
+    exit 1
+}
+if ($sig.SignerCertificate.Subject -notmatch 'CN=Johannes Schindelin') {
+    Err "unexpected Authenticode signer: $($sig.SignerCertificate.Subject)"
+    Remove-Item -Force $installer
+    exit 1
+}
+Ok "authenticode verified: $($sig.SignerCertificate.Subject)"
+
 Log 'running installer (silent, machine-wide)'
 $p = Start-Process -FilePath $installer -ArgumentList '/VERYSILENT', '/NORESTART', '/NOCANCEL', '/SP-', '/SUPPRESSMSGBOXES' -Wait -PassThru
 Remove-Item -Force $installer

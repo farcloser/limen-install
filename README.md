@@ -16,7 +16,8 @@ Everything else is per-project, and once a project is scaffolded, can be done th
 The script is idempotent, and can be used for fresh install and updates.
 
 What it does:
-- **aqua**: install (checksum-verified) if not already present.
+- **aqua**: installed (pinned, checksum-verified) if absent; an already-present
+  aqua is converged to the pinned version.
 - **shell config**: your `PATH` and `AQUA_GLOBAL_CONFIG` are appended to your shell rc
   only if missing. If anything changed, open a new shell to pick it up.
 - **global config**: the aqua global config is written with `limen` as its sole package.
