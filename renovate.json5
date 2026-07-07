@@ -28,19 +28,27 @@
       ],
       datasourceTemplate: "github-releases",
     },
-    // The limen-install script pins aquaproj/aqua-installer (version + sha256
-    // of the installer script), keyed on the same marker comment. This only
-    // bumps the version: the sha256 that must change with it is recomputed on
-    // Renovate's branches by update-installer-checksum.yaml — without that
-    // workflow this manager would produce PRs that fail checksum verification.
-    // (The same pin in .github/actions/setup-aqua is deliberately NOT managed
-    // here: that file is limen-canonical, pinned byte-for-byte, and moves
-    // through limen baseline releases.)
+    // The limen-install script carries pins of its own, each keyed on a
+    // marker comment. Leading-marker form — `# renovate: depName=…` above a
+    // `readonly NAME="ver"` line: today aquaproj/aqua-installer (whose
+    // companion sha256 is recomputed on Renovate's branches by
+    // update-installer-checksum.yaml; without that workflow the bump would
+    // fail checksum verification) and aquaproj/aqua (no checksum companion —
+    // the verified installer performs that download). Trailing-marker form —
+    // the farcloser/limen package pin inside the embedded global aqua config
+    // heredoc: Renovate groups it with the same dep's pin in aqua.yaml
+    // (managed by the aqua preset), so the repo's dev pin and what new
+    // machines install move in one PR; no checksum follow-up, the
+    // machine-side aqua-checksums.json is generated at install time, never
+    // committed here. (The equivalent pins in .github/actions/setup-aqua are
+    // deliberately NOT managed here: that file is limen-canonical, pinned
+    // byte-for-byte, and moves through limen baseline releases.)
     {
       customType: "regex",
       managerFilePatterns: ["/^limen-install$/"],
       matchStrings: [
-        "# renovate: depName=(?<depName>[^\\s]+)\\n\\s*readonly AQUA_INSTALLER_VERSION=\"(?<currentValue>[^\"]+)\"",
+        "# renovate: depName=(?<depName>[^\\s]+)\\n\\s*readonly [A-Z_]+=\"(?<currentValue>[^\"]+)\"",
+        "name: [^@\\s]+@(?<currentValue>[^\\s]+) # renovate: depName=(?<depName>[^\\s]+)",
       ],
       datasourceTemplate: "github-releases",
     },
