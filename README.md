@@ -32,8 +32,7 @@ limen bootstrap [-license id] [-holder name] <path>
 ```
 
 (bootstrap authorizes the repository's aqua policy and installs the pinned
-tooling itself — `-skip-install` opts out). For an existing repository, from
-its root:
+tooling itself). For an existing repository, from its root:
 
 ```bash
 aqua policy allow && aqua install --only-link
