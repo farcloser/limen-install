@@ -144,8 +144,7 @@ registries:
     type: local
     path: registry.yaml
 packages:
-  # TODO: bump to v0.0.1 once the first real release is cut.
-  - name: farcloser/limen@v0.0.0-test.8 # renovate: depName=farcloser/limen
+  - name: farcloser/limen@v0.0.1 # renovate: depName=farcloser/limen
     registry: farcloser
 YAML
 
