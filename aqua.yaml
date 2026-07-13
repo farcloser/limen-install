@@ -39,7 +39,7 @@ packages:
     registry: local
   - name: farcloser/limen@v0.0.1 # renovate: depName=farcloser/limen
     registry: local
-  - name: goreleaser/goreleaser@v2.16.0
+  - name: goreleaser/goreleaser@v2.17.0
   - name: sigstore/cosign@v3.1.1
   - name: gotestyourself/gotestsum@v1.13.0
   - name: jqlang/jq@jq-1.8.2
