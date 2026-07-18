@@ -1,28 +1,28 @@
 {
   "checksums": [
     {
-      "id": "github_release/github.com/casey/just/1.55.1/just-1.55.1-aarch64-apple-darwin.tar.gz",
-      "checksum": "0225E3899B1B555BC3F4122D0402BA931A6EE697D188C68E4D971468064C78F4",
+      "id": "github_release/github.com/casey/just/1.56.0/just-1.56.0-aarch64-apple-darwin.tar.gz",
+      "checksum": "F35798D4BCDC4DB020EEF7D2853AD98BBFB97A4D29EE695BA042F18E7FEDCC11",
       "algorithm": "sha256"
     },
     {
-      "id": "github_release/github.com/casey/just/1.55.1/just-1.55.1-aarch64-unknown-linux-musl.tar.gz",
-      "checksum": "B0EE814C9656427408E339893541E30D9027828686839499B2A2A34DD61AD173",
+      "id": "github_release/github.com/casey/just/1.56.0/just-1.56.0-aarch64-unknown-linux-musl.tar.gz",
+      "checksum": "C8C1D656E9F47569EC1AE2BF8779AF2621CDEEA6BBBBA3B0CACD64F951D25E2B",
       "algorithm": "sha256"
     },
     {
-      "id": "github_release/github.com/casey/just/1.55.1/just-1.55.1-x86_64-apple-darwin.tar.gz",
-      "checksum": "74D7D0AFC195DF14D8E34636FB9B6A9C7D3D443622478DBE86140FFE41AD9192",
+      "id": "github_release/github.com/casey/just/1.56.0/just-1.56.0-x86_64-apple-darwin.tar.gz",
+      "checksum": "09B35FF6D17023FFAE37CE408D1A78A976D9E001CAE54B88E238F7F40DB9B783",
       "algorithm": "sha256"
     },
     {
-      "id": "github_release/github.com/casey/just/1.55.1/just-1.55.1-x86_64-pc-windows-msvc.zip",
-      "checksum": "8106E6C036AEA52DD1D5109BDF9357C37BA87A0E0EF1013D7327103942550C79",
+      "id": "github_release/github.com/casey/just/1.56.0/just-1.56.0-x86_64-pc-windows-msvc.zip",
+      "checksum": "804F5B2FE94291D0DF38FD8DFC5620AFBF3496F8F11C1915B42A87323234F0BA",
       "algorithm": "sha256"
     },
     {
-      "id": "github_release/github.com/casey/just/1.55.1/just-1.55.1-x86_64-unknown-linux-musl.tar.gz",
-      "checksum": "B0EF600F0DF20D5AE91AE931627C499FC52B477FFE5F5EA7B7B3EC616B16C778",
+      "id": "github_release/github.com/casey/just/1.56.0/just-1.56.0-x86_64-unknown-linux-musl.tar.gz",
+      "checksum": "FA2A8EC1015D9DF5330941ADE12437488FC40D33F9C9F8CD4EB70A26DE11B639",
       "algorithm": "sha256"
     },
     {
