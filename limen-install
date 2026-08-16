@@ -158,7 +158,7 @@ registries:
     type: local
     path: registry.yaml
 packages:
-  - name: farcloser/limen@v0.0.1 # renovate: depName=farcloser/limen
+  - name: farcloser/limen@v0.0.16 # renovate: depName=farcloser/limen
     registry: farcloser
 YAML
 
