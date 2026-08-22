@@ -7,8 +7,8 @@ set working-directory := '../..'
 # Silence just's per-line command echo; recipes announce themselves via _banner.
 set quiet
 
-# Shared private _banner recipe (see _lib.just).
-import '_lib.just'
+# Shared private _banner recipe (see lib.just).
+import 'lib.just'
 
 # The mutating counterpart of `just do lint homebrew` — brew's vendored
 # RuboCop with --fix. Same machine-layer exception as the lint module:
@@ -30,6 +30,8 @@ style: (_banner "fix homebrew" "style")
     # repo without formulas passes vacuously even brew-less.
     files=()
     while IFS= read -r -d '' f; do
+        # Tracked-but-deleted files are skipped (see lint.just's `just` recipe).
+        [ -f "$f" ] || continue
         files+=("$f")
     done < <(git ls-files -z --cached --others --exclude-standard \
         'Formula/*.rb' 'Formula/**/*.rb' 'Casks/*.rb' 'Casks/**/*.rb')
