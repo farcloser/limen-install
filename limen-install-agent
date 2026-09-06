@@ -1,0 +1,254 @@
+#!/usr/bin/env bash
+#
+# limen-install-agent — let a Claude Code session commit and push as a
+# dedicated bot identity: signed commits, over ssh, from inside its sandbox.
+#
+# The design (see limen's book/agents.md for the reasoning):
+#   - The bot's key lives in the Secure Enclave (Secretive) and is served by
+#     its agent over a unix socket. Non-exportable; no touch requirement —
+#     the repository rulesets (pull requests, signatures) are the veto, not a
+#     gesture the human ends up performing blindly.
+#   - Claude Code's sandbox may reach that ONE socket; ~/.ssh stays denied.
+#   - The bot identity (name, email, signing key) is injected as
+#     session-scoped git configuration, so the human's own git config is
+#     never touched and never sees the bot.
+#   - ssh from inside the sandbox needs two things the sandbox does not
+#     provide: an ssh that supports ECDSA (Apple's; the Homebrew OpenSSH is
+#     built without OpenSSL) and a ProxyCommand that authenticates to the
+#     sandbox's egress proxy (its own uses an unauthenticated `nc`, which the
+#     proxy refuses). Both are wired through core.sshCommand, plus a `git c`
+#     alias that drops the sandbox's GIT_SSH_COMMAND so core.sshCommand wins.
+#   - GitHub's host keys are pinned from its published list; no
+#     trust-on-first-use, and a changed key fails the connection.
+#
+# Usage:
+#   limen-install-agent [--socket PATH] [--no-verify] <login> <email> <public-key-file>
+#
+# <login> and <email> are the bot's GitHub account (a machine user, invited as
+# an outside collaborator with write on the repositories it may touch), and
+# <public-key-file> its public key as exported by Secretive — registered on
+# that account BOTH as an authentication key and as a signing key.
+#
+# Idempotent: re-run to converge after any change. macOS only (Secretive).
+
+set -euo pipefail
+
+log() { printf '› %s\n' "$*"; }
+ok()  { printf '✓ %s\n' "$*"; }
+err() { printf '✗ %s\n' "$*" >&2; }
+
+SECRETIVE_SOCKET="$HOME/Library/Containers/com.maxgoedjen.Secretive.SecretAgent/Data/socket.ssh"
+VERIFY=1
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --socket) SECRETIVE_SOCKET="$2"; shift 2 ;;
+    --no-verify) VERIFY=0; shift ;;
+    --) shift; break ;;
+    -*) err "unknown option: $1"; exit 2 ;;
+    *) break ;;
+  esac
+done
+if [ $# -ne 3 ]; then
+  err "usage: limen-install-agent [--socket PATH] [--no-verify] <login> <email> <public-key-file>"
+  exit 2
+fi
+readonly BOT_LOGIN="$1" BOT_EMAIL="$2" BOT_KEY_FILE="$3"
+BOT_KEY="$(head -n 1 "$BOT_KEY_FILE")"
+readonly BOT_KEY
+case "$BOT_KEY" in
+  ecdsa-sha2-nistp256\ *|ssh-ed25519\ *|sk-*\ *) ;;
+  *) err "$BOT_KEY_FILE does not look like an OpenSSH public key"; exit 2 ;;
+esac
+
+[ "$(uname -s)" = Darwin ] || { err "macOS only: the bot key lives in the Secure Enclave (Secretive)"; exit 1; }
+for tool in python3 curl; do
+  command -v "$tool" >/dev/null 2>&1 || { err "$tool is required (the ProxyCommand helper and the settings merge are python3; curl fetches GitHub's host keys)"; exit 1; }
+done
+
+# Claude Code's configuration home; CLAUDE_CONFIG_DIR is its own override.
+readonly CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+readonly HELPER="$CLAUDE_HOME/bin/ssh-connect-proxy"
+readonly KNOWN_HOSTS="$CLAUDE_HOME/known_hosts"
+readonly SETTINGS="$CLAUDE_HOME/settings.json"
+
+install_helper() {
+  mkdir -p "$CLAUDE_HOME/bin"
+  cat > "$HELPER" <<'PY'
+#!/usr/bin/env python3
+"""ssh ProxyCommand for the Claude Code sandbox: an authenticated HTTP CONNECT tunnel.
+
+The sandbox routes every outbound connection through a per-session proxy that
+requires credentials. It hands them to HTTP clients via HTTPS_PROXY, but the
+ssh ProxyCommand it configures (a bare `nc -X 5`) offers none, so ssh is
+refused. This helper speaks CONNECT with those credentials, then relays bytes
+between ssh and the tunnel. Installed by limen-install-agent; the proxy's port
+and credentials are read from the environment at run time.
+
+usage (as ssh sees it): ssh-connect-proxy %h %p
+"""
+import base64
+import os
+import select
+import socket
+import sys
+from urllib.parse import unquote, urlsplit
+
+
+def proxy_from_env():
+    for name in ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy"):
+        value = os.environ.get(name)
+        if value:
+            parts = urlsplit(value)
+            if parts.hostname and parts.port:
+                return parts
+    sys.exit("ssh-connect-proxy: no HTTP proxy in the environment (not inside the Claude Code sandbox?)")
+
+
+def relay(sock, out):
+    fin = sys.stdin.buffer.fileno()
+    while True:
+        readable, _, _ = select.select([sock, fin], [], [])
+        if sock in readable:
+            data = sock.recv(65536)
+            if not data:
+                return
+            out.write(data)
+            out.flush()
+        if fin in readable:
+            data = os.read(fin, 65536)
+            if not data:
+                sock.shutdown(socket.SHUT_WR)
+                while True:
+                    tail = sock.recv(65536)
+                    if not tail:
+                        return
+                    out.write(tail)
+                    out.flush()
+            sock.sendall(data)
+
+
+def main():
+    if len(sys.argv) != 3:
+        sys.exit("usage: ssh-connect-proxy host port")
+    host, port = sys.argv[1], sys.argv[2]
+    proxy = proxy_from_env()
+    sock = socket.create_connection((proxy.hostname, proxy.port))
+    request = f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n"
+    if proxy.username:
+        credentials = f"{unquote(proxy.username)}:{unquote(proxy.password or '')}".encode()
+        request += "Proxy-Authorization: Basic " + base64.b64encode(credentials).decode() + "\r\n"
+    sock.sendall((request + "\r\n").encode())
+    buffer = b""
+    while b"\r\n\r\n" not in buffer:
+        chunk = sock.recv(4096)
+        if not chunk:
+            sys.exit("ssh-connect-proxy: proxy closed the connection during CONNECT")
+        buffer += chunk
+    head, rest = buffer.split(b"\r\n\r\n", 1)
+    status = head.split(b"\r\n", 1)[0].decode(errors="replace")
+    if " 200" not in status:
+        sys.exit(f"ssh-connect-proxy: CONNECT {host}:{port} refused: {status}")
+    out = sys.stdout.buffer
+    if rest:
+        out.write(rest)
+        out.flush()
+    relay(sock, out)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (BrokenPipeError, ConnectionResetError):
+        pass
+PY
+  chmod 0755 "$HELPER"
+  ok "ProxyCommand helper: $HELPER"
+}
+
+pin_github_host_keys() {
+  # GitHub publishes its host keys at api.github.com/meta; pinned here so the
+  # sandbox (denied ~/.ssh) verifies the host strictly, never trust-on-first-use.
+  local meta
+  meta="$(curl --proto '=https' --tlsv1.2 -fsSL https://api.github.com/meta)"
+  {
+    echo "# GitHub's ssh host keys, from https://api.github.com/meta — written by limen-install-agent."
+    echo "# Compare against https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints"
+    printf '%s' "$meta" | python3 -c 'import json,sys; [print("github.com", k) for k in json.load(sys.stdin)["ssh_keys"]]'
+  } > "$KNOWN_HOSTS"
+  chmod 0644 "$KNOWN_HOSTS"
+  ok "GitHub host keys pinned: $KNOWN_HOSTS ($(grep -c '^github.com ' "$KNOWN_HOSTS") keys)"
+}
+
+merge_settings() {
+  # Everything the session needs, merged into the existing settings.json:
+  # only the keys below are (re)written, everything else is preserved.
+  mkdir -p "$CLAUDE_HOME"
+  [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
+  cp "$SETTINGS" "$SETTINGS.bak"
+  local ssh_command
+  ssh_command="/usr/bin/ssh -o ProxyCommand='python3 $HELPER %h %p' -o UserKnownHostsFile=$KNOWN_HOSTS -o StrictHostKeyChecking=yes -o ControlMaster=no -o ControlPath=none"
+  SOCKET="$SECRETIVE_SOCKET" LOGIN="$BOT_LOGIN" EMAIL="$BOT_EMAIL" KEY="$BOT_KEY" SSHCMD="$ssh_command" \
+  python3 - "$SETTINGS" <<'PY'
+import json, os, sys
+path = sys.argv[1]
+with open(path) as f:
+    settings = json.load(f)
+env = settings.setdefault("env", {})
+# Drop a stale numbered block before writing the new one.
+for key in [k for k in env if k.startswith("GIT_CONFIG_")]:
+    del env[key]
+entries = [
+    ("user.name", os.environ["LOGIN"]),
+    ("user.email", os.environ["EMAIL"]),
+    ("user.signingkey", "key::" + os.environ["KEY"]),
+    # Apple's ssh-keygen: the Homebrew OpenSSH is built without OpenSSL and
+    # cannot use an ECDSA (Secure Enclave) key.
+    ("gpg.ssh.program", "/usr/bin/ssh-keygen"),
+    ("core.sshCommand", os.environ["SSHCMD"]),
+    # `git c push|fetch|pull`: the sandbox exports GIT_SSH_COMMAND, which
+    # outranks core.sshCommand; this alias drops it for one command.
+    ("alias.c", "!env -u GIT_SSH_COMMAND git"),
+]
+env["GIT_CONFIG_COUNT"] = str(len(entries))
+for index, (key, value) in enumerate(entries):
+    env[f"GIT_CONFIG_KEY_{index}"] = key
+    env[f"GIT_CONFIG_VALUE_{index}"] = value
+env["SSH_AUTH_SOCK"] = os.environ["SOCKET"]
+sockets = settings.setdefault("sandbox", {}).setdefault("network", {}).setdefault("allowUnixSockets", [])
+if os.environ["SOCKET"] not in sockets:
+    sockets.append(os.environ["SOCKET"])
+with open(path, "w") as f:
+    json.dump(settings, f, indent=2)
+    f.write("\n")
+PY
+  ok "Claude Code settings merged: $SETTINGS (backup: $SETTINGS.bak)"
+}
+
+verify() {
+  [ -S "$SECRETIVE_SOCKET" ] || { err "no agent socket at $SECRETIVE_SOCKET — enable Secretive's agent (SecretAgent) and re-run"; exit 1; }
+  local blob
+  blob="$(printf '%s' "$BOT_KEY" | awk '{print $2}')"
+  if ! SSH_AUTH_SOCK="$SECRETIVE_SOCKET" /usr/bin/ssh-add -L 2>/dev/null | grep -qF "$blob"; then
+    err "the agent at $SECRETIVE_SOCKET does not serve the key in $BOT_KEY_FILE — create it in Secretive (authentication OFF) and re-run"
+    exit 1
+  fi
+  ok "agent serves the bot key"
+  # Outside the sandbox there is no proxy: plain ssh, pinned host keys, this
+  # agent only — GitHub answers with the account the key is registered on.
+  local greeting
+  greeting="$(/usr/bin/ssh -o IdentityAgent="$SECRETIVE_SOCKET" -o IdentitiesOnly=no -o UserKnownHostsFile="$KNOWN_HOSTS" -o StrictHostKeyChecking=yes -T git@github.com 2>&1 || true)"
+  case "$greeting" in
+    "Hi $BOT_LOGIN!"*) ok "GitHub authenticates the key as $BOT_LOGIN" ;;
+    Hi\ *) err "GitHub authenticates the key as a different account: ${greeting%%!*}! — register it on $BOT_LOGIN instead"; exit 1 ;;
+    *) err "GitHub did not authenticate the key: $greeting"; err "register the public key on $BOT_LOGIN as an authentication key (and as a signing key)"; exit 1 ;;
+  esac
+}
+
+install_helper
+pin_github_host_keys
+merge_settings
+if [ "$VERIFY" = 1 ]; then verify; fi
+ok "done — restart Claude Code sessions to pick up the settings"
+log "remaining, on GitHub: invite $BOT_LOGIN as an outside collaborator (write) on each repository it may push to"
+log "remaining, per repository: add the bot to .allowed_signers so \`just lint\` verifies its signatures:"
+log "  $BOT_EMAIL namespaces=\"git\" $(printf '%s' "$BOT_KEY" | awk '{print $1, $2}')"

@@ -9,38 +9,48 @@
   // Supply-chain cooldown: wait before proposing a bump. Doubles as protection
   // against the race where a release tag exists but its assets aren't uploaded yet.
   minimumReleaseAge: "3 days",
-  // `just lint commits` enforces DCO on every PR range, bot commits included.
+  // Vulnerability-fix PRs from GitHub's Dependabot alerts (the baseline keeps
+  // the alerts on for exactly this; Dependabot's OWN update PRs are off —
+  // Renovate is the one dependency bot). Stated explicitly, not left to the
+  // preset default, because `enabled: true` here is what reaches `// indirect`
+  // Go modules: the gomod manager disables indirect deps, and the alert path
+  // re-enables a dep only when this object says enabled. Fix PRs skip the
+  // cooldown above (a known-vulnerable version is the worse risk) and take
+  // the lowest fixed version, both Renovate defaults for this object.
+  vulnerabilityAlerts: {
+    enabled: true,
+  },
+  // `just do lint commits` enforces DCO on every PR range, bot commits included.
   commitBody: "Signed-off-by: renovate[bot] <29139614+renovate[bot]@users.noreply.github.com>",
   // The update-aqua-checksum workflow pushes a fix-up commit onto Renovate's
   // branches; without this, Renovate treats the branch as human-modified and
   // stops rebasing it.
-  gitIgnoredAuthors: ["41898282+github-actions[bot]@users.noreply.github.com"],
+  gitIgnoredAuthors: [
+    "300983632+limen-ci-farcloser[bot]@users.noreply.github.com",
+    "41898282+github-actions[bot]@users.noreply.github.com",
+  ],
   customManagers: [
-    // The aqua preset above only manages the lowercase `aqua_version:` input of
-    // the official installer action, and aqua.yaml itself. The AQUA_VERSION env
-    // of the hand-rolled installer (.github/actions/setup-aqua) needs its own
-    // manager, keyed on the standard renovate comment above the pin.
-    {
-      customType: "regex",
-      managerFilePatterns: ["/^\\.github/.+\\.ya?ml$/"],
-      matchStrings: [
-        "# renovate: depName=(?<depName>[^\\s]+)\\n\\s*AQUA_VERSION: (?<currentValue>[^\\s]+)",
-      ],
-      datasourceTemplate: "github-releases",
-    },
-    // The limen-install script pins aquaproj/aqua-installer (version + sha256
-    // of the installer script), keyed on the same marker comment. This only
-    // bumps the version: the sha256 that must change with it is recomputed on
-    // Renovate's branches by update-installer-checksum.yaml — without that
-    // workflow this manager would produce PRs that fail checksum verification.
-    // (The same pin in .github/actions/setup-aqua is deliberately NOT managed
-    // here: that file is limen-canonical, pinned byte-for-byte, and moves
-    // through limen baseline releases.)
+    // The limen-install script carries pins of its own, each keyed on a
+    // marker comment. Leading-marker form — `# renovate: depName=…` above a
+    // `readonly NAME="ver"` line: today aquaproj/aqua-installer (whose
+    // companion sha256 is recomputed on Renovate's branches by
+    // update-installer-checksum.yaml; without that workflow the bump would
+    // fail checksum verification) and aquaproj/aqua (no checksum companion —
+    // the verified installer performs that download). Trailing-marker form —
+    // the farcloser/limen package pin inside the embedded global aqua config
+    // heredoc: Renovate groups it with the same dep's pin in aqua.yaml
+    // (managed by the aqua preset), so the repo's dev pin and what new
+    // machines install move in one PR; no checksum follow-up, the
+    // machine-side aqua-checksums.json is generated at install time, never
+    // committed here. (The equivalent pins in .github/actions/setup-aqua are
+    // deliberately NOT managed here: that file is limen-canonical, pinned
+    // byte-for-byte, and moves through limen baseline releases.)
     {
       customType: "regex",
       managerFilePatterns: ["/^limen-install$/"],
       matchStrings: [
-        "# renovate: depName=(?<depName>[^\\s]+)\\n\\s*readonly AQUA_INSTALLER_VERSION=\"(?<currentValue>[^\"]+)\"",
+        "# renovate: depName=(?<depName>[^\\s]+)\\n\\s*readonly [A-Z_]+=\"(?<currentValue>[^\"]+)\"",
+        "name: [^@\\s]+@(?<currentValue>[^\\s]+) # renovate: depName=(?<depName>[^\\s]+)",
       ],
       datasourceTemplate: "github-releases",
     },

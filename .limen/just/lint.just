@@ -7,10 +7,10 @@ set working-directory := '../..'
 # Silence just's per-line command echo; recipes announce themselves via _banner.
 set quiet
 
-# Shared private _banner recipe (see _lib.just).
-import '_lib.just'
+# Shared private _banner recipe (see lib.just).
+import 'lib.just'
 
-default: links yaml shell dockerfile commits just aqua limen
+default: limen just aqua links yaml shell dockerfile commits
 
 # Go linters live in their own submodule: `just do lint go` runs them all,
 # `just do lint go <recipe>` (e.g. `just do lint go mod`) runs one.
@@ -27,7 +27,7 @@ mod homebrew 'lint-homebrew.just'
 # (mandatory files, canonical baseline, license, aqua pins). First in the
 # default set: the other linters trust the canonical files this one verifies.
 # LIMEN_BIN exists for one consumer — the limen repository itself, whose
-# the root Justfile points it at `go run ./cmd/limen` so the working tree is judged
+# root Justfile points it at `go run ./cmd/limen` so the working tree is judged
 # by its own enforcer, not by the (always older) released pin. Everyone else
 # runs the aqua-pinned binary.
 limen: (_banner "lint" "limen")
@@ -45,9 +45,22 @@ just: (_banner "lint" "just")
     #!/usr/bin/env bash
     set -euo pipefail
     # --cached --others --exclude-standard: tracked *and* new untracked files,
-    # still honoring .gitignore — so a not-yet-staged file is linted too.
-    git ls-files -z --cached --others --exclude-standard 'justfile' 'Justfile' '*.just' '**/justfile' \
-      | xargs -0 -I{} just --fmt --check --justfile {}
+    # still honoring .gitignore — so a not-yet-staged file is linted too. The
+    # index half of that union also lists files deleted from the worktree but
+    # not yet staged (a mid-migration tree, e.g. a renamed canonical module),
+    # so every path is existence-checked before it reaches a tool: enumeration
+    # is git's (ignore semantics), truth is the working tree's. Deleted files
+    # are vacuously well-formatted; guarding required files is `limen check`'s
+    # job, not a formatter's.
+    # Literal names need their '**/' twins — git pathspec literals do not
+    # match across directories (only wildcard patterns like '*.just' do) and
+    # are case-sensitive. All three spellings just honors are covered:
+    # justfile, Justfile, and the hidden .justfile.
+    while IFS= read -r -d '' f; do
+        [ -f "$f" ] || continue
+        just --fmt --check --justfile "$f"
+    done < <(git ls-files -z --cached --others --exclude-standard \
+        'justfile' '**/justfile' 'Justfile' '**/Justfile' '.justfile' '**/.justfile' '*.just')
 
 # godolint — hadolint as pure Go (https://github.com/farcloser/godolint) —
 # over every Dockerfile in the repository; passes vacuously when there are
@@ -66,6 +79,8 @@ dockerfile: (_banner "lint" "dockerfile")
     # already matches across directories; a literal like 'Dockerfile' does not.
     files=()
     while IFS= read -r -d '' f; do
+        # Tracked-but-deleted files are skipped (see `lint just`).
+        [ -f "$f" ] || continue
         files+=("$f")
     done < <(git ls-files -z --cached --others --exclude-standard \
         'Dockerfile' '**/Dockerfile' 'Dockerfile.*' '**/Dockerfile.*' '*.Dockerfile' \
@@ -89,6 +104,8 @@ shell: (_banner "lint" "shell")
     # No mapfile (bash 4+): build the array with a read loop, portable to bash 3.2.
     files=()
     while IFS= read -r -d '' f; do
+        # Tracked-but-deleted files are skipped (see `lint just`).
+        [ -f "$f" ] || continue
         case "$f" in
             *.sh|*.bash) files+=("$f"); continue ;;
         esac
@@ -165,9 +182,13 @@ commits range="": (_banner "lint" "commits")
     # below verify signatures — this is convenience wiring, not enforcement.
     # See https://github.com/andyfeller/gh-ssh-allowed-signers for automation
     # to retrieve contributor keys.
+    # Best-effort: sandboxed agent sessions (e.g. Claude Code) write-protect
+    # .git/config as an escape-vector guard, and losing the display wiring must
+    # not fail the lint the rules below actually enforce.
     if [ -f .allowed_signers ]; then
         git config --unset-all gpg.ssh.allowedSignersFile 2>/dev/null || true
-        git config --add gpg.ssh.allowedSignersFile .allowed_signers
+        git config --add gpg.ssh.allowedSignersFile .allowed_signers 2>/dev/null ||
+            echo "note: .git/config not writable; signature display not armed" >&2
     fi
     range="{{ range }}"
     if [ -z "$range" ] && [ -n "${GITHUB_BASE_REF:-}" ]; then
@@ -197,17 +218,46 @@ commits range="": (_banner "lint" "commits")
         git-validation -run DCO,short-subject,dangling-whitespace
     fi
 
-# Verify aqua-checksums.json is complete and in sync with aqua.yaml.
+# Verify aqua-checksums.json is in sync with aqua.yaml — the working tree's
+# pair, exactly as it stands: git state (staged, committed, neither) is
+# irrelevant to coherence. Recipes judge the working tree; git answers
+# enumeration and history questions only.
 aqua: (_banner "lint" "aqua")
     #!/usr/bin/env bash
     set -euo pipefail
-    # aqua has no read-only validator, so regenerate and compare against the
-    # committed file (needs network). `git diff HEAD` is staging-independent — it
-    # compares the working tree to the last commit, not the index. On drift the
-    # corrected file is left in place — review and commit it.
+    # aqua has no read-only validator, so regenerate, compare against a
+    # snapshot, and restore (needs network): the lint observes, never mutates —
+    # `just do fix aqua` is the mutating twin. mktemp gets an explicit template
+    # because macOS mktemp ignores $TMPDIR.
+    tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/lint-aqua.XXXXXX")
+    trap 'rm -rf "$tmpdir"' EXIT
+    had=""
+    if [ -f aqua-checksums.json ]; then
+        cp aqua-checksums.json "$tmpdir/snapshot"
+        had=1
+    fi
+    # Restore the working tree from the snapshot on EVERY exit — success, drift,
+    # an aqua failure (set -e), or an interrupt. update-checksum mutates
+    # aqua-checksums.json in place, and a lint must never leave that behind; an
+    # inline restore only runs on the paths it is written on, so it belongs in the
+    # trap. Installed AFTER the snapshot so `had` is known — restoring before that
+    # would wrongly rm a file we had not yet copied.
+    # Trap-invoked functions aren't seen as invoked, so this is false-flagged as
+    # dead code (SC2329) — https://github.com/koalaman/shellcheck/wiki/SC2329.
+    # shellcheck disable=SC2329
+    restore() {
+        if [ -n "$had" ]; then
+            cp "$tmpdir/snapshot" aqua-checksums.json
+        else
+            rm -f aqua-checksums.json
+        fi
+        rm -rf "$tmpdir"
+    }
+    trap restore EXIT
     # --log-level warn: the per-package INFO lines are noise when nothing is wrong.
     aqua --log-level warn update-checksum --prune
-    if ! git diff --quiet HEAD -- aqua-checksums.json; then
-        echo "aqua-checksums.json was out of sync with aqua.yaml (regenerated above) — review and commit it." >&2
-        exit 1
+    if [ -n "$had" ] && cmp -s aqua-checksums.json "$tmpdir/snapshot"; then
+        exit 0
     fi
+    echo "aqua-checksums.json is out of sync with aqua.yaml — run 'just do fix aqua'." >&2
+    exit 1
