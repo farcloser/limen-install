@@ -23,7 +23,7 @@ readonly AQUA_INSTALLER_SHA256="98b883756cdd0a6807a8c7623404bfc3bc169275ad9064dc
 # companion here: the checksum-verified installer above performs the download
 # through its own verified bootstrap. Renovate-managed (see renovate.json5).
 # renovate: depName=aquaproj/aqua
-readonly AQUA_VERSION="v2.60.1"
+readonly AQUA_VERSION="v2.62.3"
 
 # The default locations, kept in UNEXPANDED form: this exact text goes into the
 # shell rc, so the rc keeps tracking $HOME / XDG_CONFIG_HOME at shell startup
