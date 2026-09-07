@@ -64,15 +64,21 @@ What it does (idempotent — re-run to converge):
 - **ProxyCommand helper**: `~/.claude/bin/ssh-connect-proxy`, an authenticated
   HTTP CONNECT tunnel through the sandbox's egress proxy. The sandbox's own ssh
   wiring uses an unauthenticated `nc`, which its proxy refuses.
+- **Signing wrapper**: `~/.claude/bin/ssh-keygen-agent`, Apple's `ssh-keygen`
+  with the Secretive socket pinned inside it. The sandbox rewrites
+  `SSH_AUTH_SOCK` to a launchd socket it then denies — even when
+  `settings.json` sets it — so the socket has to travel inside what git
+  execs: this wrapper for signing, `-o IdentityAgent` in `core.sshCommand`
+  for ssh.
 - **Pinned host keys**: `~/.claude/known_hosts`, GitHub's keys from its
   published list — the sandbox is denied `~/.ssh`, and there is no
   trust-on-first-use.
 - **Claude Code settings** (`~/.claude/settings.json`, merged, backed up):
-  the Secretive socket allowed into the sandbox, `SSH_AUTH_SOCK` pointing at
-  it, and the bot identity as session-scoped git configuration — name, email,
-  signing key, Apple's `ssh-keygen` (the Homebrew OpenSSH is built without
-  OpenSSL and cannot use an ECDSA key), `core.sshCommand`, and a `git c`
-  alias. The human's own git config is never touched.
+  the Secretive socket allowed into the sandbox, and the bot identity as
+  session-scoped git configuration — name, email, signing key, the signing
+  wrapper as `gpg.ssh.program` (the Homebrew OpenSSH is built without OpenSSL
+  and cannot use an ECDSA key; Apple's can), `core.sshCommand` with the agent
+  pinned, and a `git c` alias. The human's own git config is never touched.
 - **Verification**: the agent serves the key, and GitHub authenticates it as
   the bot.
 
