@@ -31,7 +31,7 @@ packages:
     registry: local
   - name: github.com/farcloser/godolint/cmd/godolint@v0.1.0
     registry: local
-  - name: farcloser/limen@v0.1.1 # renovate: depName=farcloser/limen
+  - name: farcloser/limen@v0.1.2 # renovate: depName=farcloser/limen
     registry: local
   - name: goreleaser/goreleaser@v2.18.0
   - name: sigstore/cosign@v3.1.3
