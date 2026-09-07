@@ -169,7 +169,7 @@ pin_github_host_keys() {
   # GitHub publishes its host keys at api.github.com/meta; pinned here so the
   # sandbox (denied ~/.ssh) verifies the host strictly, never trust-on-first-use.
   local meta
-  meta="$(curl --proto '=https' --tlsv1.2 -fsSL https://api.github.com/meta)"
+  meta="$(curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 3 --retry-all-errors https://api.github.com/meta)"
   {
     echo "# GitHub's ssh host keys, from https://api.github.com/meta — written by limen-install-agent."
     echo "# Compare against https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints"
