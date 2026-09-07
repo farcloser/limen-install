@@ -25,22 +25,18 @@ packages:
   - name: golangci/golangci-lint@v2.13.2
   - name: google/yamlfmt@v0.21.0
   - name: lycheeverse/lychee@lychee-v0.24.2
-  - name: github.com/google/go-licenses/v2@v2.0.1
-    registry: local
   - name: github.com/vbatts/git-validation@v1.2.2
-    registry: local
-  - name: golang.org/x/vuln/cmd/govulncheck@v1.7.0
-    registry: local
-  - name: golang.org/x/tools/cmd/deadcode@v0.49.0
     registry: local
   - name: github.com/goccy/go-graphviz/cmd/dot@v0.2.10
     registry: local
   - name: github.com/farcloser/godolint/cmd/godolint@v0.1.0
     registry: local
-  - name: farcloser/limen@v0.0.16 # renovate: depName=farcloser/limen
+  - name: farcloser/limen@v0.1.1 # renovate: depName=farcloser/limen
     registry: local
   - name: goreleaser/goreleaser@v2.18.0
   - name: sigstore/cosign@v3.1.3
   - name: gotestyourself/gotestsum@v1.13.0
   - name: jqlang/jq@jq-1.8.2
   - name: cli/cli@v2.100.0
+  - name: uutils/coreutils@0.11.0
+    registry: local
