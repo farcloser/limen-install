@@ -4,10 +4,8 @@
 # coreutils (git-bash) -- the environment every farcloser workflow on Windows
 # runs under.
 #
-# The installer is downloaded at a pinned version and checksum-verified -- the
-# same doctrine as every other tool we install, and it works identically in
-# an interactive session and in automation (e.g. a VM driven through the QEMU
-# guest agent, which executes as SYSTEM and has no winget).
+# Not winget: automation (a VM driven through the QEMU guest agent, running
+# as SYSTEM) has none.
 #
 # Idempotent: re-running is safe. This is the ONE entry point on Windows: it
 # ends by handing off to ./limen-install (the bash script) under git-bash --
@@ -82,13 +80,9 @@ if ($actual -ne $GitSha256[$arch]) {
 }
 Ok 'checksum verified'
 
-# Signature doctrine: verify whenever upstream publishes. Git for Windows
-# installers are Authenticode-signed (Microsoft ID Verified, via Trusted
-# Signing); Get-AuthenticodeSignature does the cryptographic work -- hash
-# match plus chain to a trusted root -- and the subject pin ties the
-# certificate to the Git for Windows maintainer's verified identity instead
-# of accepting any validly-signed binary. Unlike the sha256 above, the signer
-# is stable across releases -- no bump needed on version moves.
+# The subject pin ties the certificate to the maintainer's verified identity,
+# not any validly-signed binary; the signer is stable across releases -- no
+# bump on version moves.
 $sig = Get-AuthenticodeSignature -FilePath $installer
 if ($sig.Status -ne 'Valid') {
     Err "Authenticode signature is '$($sig.Status)': $asset"

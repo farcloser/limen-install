@@ -1,28 +1,14 @@
-# The other half of Renovate for THIS repository's aqua-installer pin: the
-# bot bumps AQUA_INSTALLER_VERSION in ./limen-install (see renovate.json5)
-# but cannot recompute the sha256 of the installer script that must change
-# with it, so this workflow pushes the fix-up commit onto Renovate's
-# branches. The canonical update-aqua-checksum workflow cannot carry this
-# step — it is limen-pinned, byte-for-byte and repo-agnostic — so this
-# repo-specific twin follows its hardening doctrine instead:
-#   - `push:` on the branch prefix, never pull_request_target: it runs in
-#     the repo's own context, on branches only writers (the Renovate app)
-#     can create.
-#   - The checkout keeps no credential, and the update step runs with no
-#     secrets in its environment; it only downloads and hashes the one
-#     artifact the branch already declares.
-#   - The commit is made the way the canonical workflow makes its own: an
-#     App token minted for this one run and repository, and the GraphQL
-#     createCommitOnBranch mutation, whose commits GitHub signs — the
-#     `limen:main` ruleset requires signatures, and one unsigned git push
-#     onto the branch made every aqua-installer bump PR unmergeable. The
-#     token reaches only that final step, via env, never interpolation.
-#   - No loop: the no-change early exit terminates recursion, and the
-#     canonical twin's run on the pushed commit finds nothing to do.
-# Both fix-up workflows fire on renovate/** with disjoint writers (that one
-# never touches ./limen-install; this one touches nothing else), so their
-# pushes can only collide on a grouped branch bumping both — the loser fails,
-# and Renovate's next rebase retriggers it.
+# Renovate bumps AQUA_INSTALLER_VERSION in ./limen-install but cannot
+# recompute its sha256 companion; this pushes the fix-up onto renovate/**
+# (the canonical update-aqua-checksum is limen-pinned, byte-for-byte, and
+# cannot carry it). Same construction as that workflow: `push:` on the
+# branch prefix, never pull_request_target; no credential kept by the
+# checkout; the commit made through createCommitOnBranch with a one-run App
+# token so GitHub signs it — the `limen:main` ruleset requires signatures,
+# and an unsigned git push made every aqua-installer bump PR unmergeable.
+# No loop: the no-change exit ends recursion. Both fix-up workflows fire on
+# renovate/** with disjoint writers; a grouped branch bumping both can
+# collide — the loser fails, and Renovate's next rebase retriggers it.
 name: update-installer-checksum
 
 on:

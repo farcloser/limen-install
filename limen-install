@@ -3,9 +3,8 @@
 # limen-install — set up / update a dev machine's global aqua toolchain.
 # The global toolchain is ONE tool: limen, the project scaffolder, installed
 # from farcloser/limen's GitHub releases through the local aqua registry
-# embedded below — no separate config repo, no fetch. (A GITHUB_TOKEN is not
-# required, but is honored when set — useful against API rate limits, and the
-# same wiring will serve any future private tool.)
+# embedded below — no separate config repo, no fetch. (GITHUB_TOKEN is honored
+# when set: API rate limits.)
 #
 # Per-project setup is separate: `aqua policy allow && aqua i -l` inside a repo.
 
@@ -18,10 +17,8 @@ set -euo pipefail
 readonly AQUA_INSTALLER_VERSION="v4.0.5"
 readonly AQUA_INSTALLER_SHA256="451028d56959cc738564885b1dbebc2691ea038ffde04e2472e4d486a3591146"
 
-# aqua itself, pinned like every other tool and matching the canonical CI
-# action (setup-aqua) — dev machines and CI run the same aqua. No checksum
-# companion here: the checksum-verified installer above performs the download
-# through its own verified bootstrap. Renovate-managed (see renovate.json5).
+# Keep in step with setup-aqua's pin. No checksum companion: the verified
+# installer above performs this download. Renovate-managed (see renovate.json5).
 # renovate: depName=aquaproj/aqua
 readonly AQUA_VERSION="v2.62.3"
 
@@ -141,8 +138,8 @@ ensure_shell_config() {
   eval "export PATH=\"$(eval echo "$AQUA_BIN_EXPR"):\$PATH\""
 }
 
-# The entire global setup, inlined: config, registry, policy. Bump the
-# scaffolder version in the config below.
+# Renovate bumps the limen pin below, grouped with aqua.yaml's — do not
+# hand-edit it out of step.
 write_config() {
   mkdir -p "$CONFIG_DIR"
 
@@ -214,17 +211,11 @@ YAML
 }
 
 install_tools() {
-  # Trust the (freshly written) policy, non-interactively.
   aqua policy allow "$POLICY_FILE"
-  # Pin the release checksums (from goreleaser's checksums.txt) into
-  # aqua-checksums.json next to the global config, then install and verify.
   (cd "$CONFIG_DIR" && aqua --log-level warn update-checksum --prune && aqua --log-level warn i -a)
   ok "scaffolder ready: $(limen version 2>/dev/null || echo 'open a new shell, then run: limen version')"
 }
 
-# One idempotent path — safe on a fresh machine AND as an update. Each step
-# self-guards: aqua install skips if present, PATH/config appends skip if already
-# there, the config is rewritten, and `aqua i -a` installs only what's missing.
 install_aqua
 ensure_shell_config
 write_config
