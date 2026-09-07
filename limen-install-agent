@@ -4,6 +4,14 @@
 # dedicated bot identity: signed commits, over ssh, from inside its sandbox.
 # Design and reasoning: limen's book/agents.md.
 #
+# One trap this file works around: the Claude Code sandbox rewrites
+# SSH_AUTH_SOCK to a launchd socket it then denies, even when settings.json's
+# env block sets it (the rest of that block arrives intact). So the Secretive
+# socket travels inside what git execs — `-o IdentityAgent` in core.sshCommand
+# for ssh, a one-line ssh-keygen wrapper for signing (git execs gpg.ssh.program
+# directly; there is no shell in between to prefix an env) — and nothing here
+# depends on the environment variable reaching the session.
+#
 # Usage:
 #   limen-install-agent [--socket PATH] [--no-verify] <login> <email> <public-key-file>
 #
@@ -49,6 +57,7 @@ done
 # Claude Code's configuration home; CLAUDE_CONFIG_DIR is its own override.
 readonly CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 readonly HELPER="$CLAUDE_HOME/bin/ssh-connect-proxy"
+readonly SIGNER="$CLAUDE_HOME/bin/ssh-keygen-agent"
 readonly KNOWN_HOSTS="$CLAUDE_HOME/known_hosts"
 readonly SETTINGS="$CLAUDE_HOME/settings.json"
 
@@ -144,6 +153,20 @@ if __name__ == "__main__":
 PY
   chmod 0755 "$HELPER"
   ok "ProxyCommand helper: $HELPER"
+
+  # ssh-keygen -Y sign reaches the agent only through SSH_AUTH_SOCK, and git
+  # execs gpg.ssh.program directly — so the socket is pinned in a wrapper.
+  cat > "$SIGNER" <<SH
+#!/bin/sh
+# Written by limen-install-agent: Apple's ssh-keygen (the Homebrew one has no
+# OpenSSL, hence no ECDSA) with the Secretive agent pinned, because the Claude
+# Code sandbox rewrites SSH_AUTH_SOCK to a socket it then denies.
+SSH_AUTH_SOCK='$SECRETIVE_SOCKET'
+export SSH_AUTH_SOCK
+exec /usr/bin/ssh-keygen "\$@"
+SH
+  chmod 0755 "$SIGNER"
+  ok "signing wrapper: $SIGNER"
 }
 
 pin_github_host_keys() {
@@ -165,8 +188,10 @@ merge_settings() {
   [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
   cp "$SETTINGS" "$SETTINGS.bak"
   local ssh_command
-  ssh_command="/usr/bin/ssh -o ProxyCommand='python3 $HELPER %h %p' -o UserKnownHostsFile=$KNOWN_HOSTS -o StrictHostKeyChecking=yes -o ControlMaster=no -o ControlPath=none"
-  SOCKET="$SECRETIVE_SOCKET" LOGIN="$BOT_LOGIN" EMAIL="$BOT_EMAIL" KEY="$BOT_KEY" SSHCMD="$ssh_command" \
+  # IdentityAgent pins the enclave agent whatever SSH_AUTH_SOCK says (the
+  # sandbox rewrites it); IdentitiesOnly=no lets the agent's key be offered.
+  ssh_command="/usr/bin/ssh -o IdentityAgent=$SECRETIVE_SOCKET -o IdentitiesOnly=no -o ProxyCommand='python3 $HELPER %h %p' -o UserKnownHostsFile=$KNOWN_HOSTS -o StrictHostKeyChecking=yes -o ControlMaster=no -o ControlPath=none"
+  SOCKET="$SECRETIVE_SOCKET" LOGIN="$BOT_LOGIN" EMAIL="$BOT_EMAIL" KEY="$BOT_KEY" SSHCMD="$ssh_command" SIGNER_PATH="$SIGNER" \
   python3 - "$SETTINGS" <<'PY'
 import json, os, sys
 path = sys.argv[1]
@@ -180,9 +205,10 @@ entries = [
     ("user.name", os.environ["LOGIN"]),
     ("user.email", os.environ["EMAIL"]),
     ("user.signingkey", "key::" + os.environ["KEY"]),
-    # Apple's ssh-keygen: the Homebrew OpenSSH is built without OpenSSL and
-    # cannot use an ECDSA (Secure Enclave) key.
-    ("gpg.ssh.program", "/usr/bin/ssh-keygen"),
+    # The wrapper around Apple's ssh-keygen (the Homebrew OpenSSH is built
+    # without OpenSSL and cannot use an ECDSA key) with the agent socket
+    # pinned inside it — see the header on SSH_AUTH_SOCK.
+    ("gpg.ssh.program", os.environ["SIGNER_PATH"]),
     ("core.sshCommand", os.environ["SSHCMD"]),
     # `git c push|fetch|pull`: the sandbox exports GIT_SSH_COMMAND, which
     # outranks core.sshCommand; this alias drops it for one command.
@@ -192,6 +218,8 @@ env["GIT_CONFIG_COUNT"] = str(len(entries))
 for index, (key, value) in enumerate(entries):
     env[f"GIT_CONFIG_KEY_{index}"] = key
     env[f"GIT_CONFIG_VALUE_{index}"] = value
+# Belt and braces only: the sandbox rewrites this variable before the tool
+# shell sees it. Nothing above depends on it reaching the session.
 env["SSH_AUTH_SOCK"] = os.environ["SOCKET"]
 sockets = settings.setdefault("sandbox", {}).setdefault("network", {}).setdefault("allowUnixSockets", [])
 if os.environ["SOCKET"] not in sockets:
