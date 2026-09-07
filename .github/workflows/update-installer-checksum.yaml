@@ -11,12 +11,14 @@
 #   - The checkout keeps no credential, and the update step runs with no
 #     secrets in its environment; it only downloads and hashes the one
 #     artifact the branch already declares.
-#   - The push step runs only git, with the token scoped to that single step.
-#   - The branch name reaches the shell via env, never template interpolation
-#     (script-injection hygiene).
-#   - No loop: a push made with the default GITHUB_TOKEN triggers no further
-#     workflows — and the no-change early exit terminates recursion
-#     regardless.
+#   - The commit is made the way the canonical workflow makes its own: an
+#     App token minted for this one run and repository, and the GraphQL
+#     createCommitOnBranch mutation, whose commits GitHub signs — the
+#     `limen:main` ruleset requires signatures, and one unsigned git push
+#     onto the branch made every aqua-installer bump PR unmergeable. The
+#     token reaches only that final step, via env, never interpolation.
+#   - No loop: the no-change early exit terminates recursion, and the
+#     canonical twin's run on the pushed commit finds nothing to do.
 # Both fix-up workflows fire on renovate/** with disjoint writers (that one
 # never touches ./limen-install; this one touches nothing else), so their
 # pushes can only collide on a grouped branch bumping both — the loser fails,
@@ -59,17 +61,52 @@ jobs:
           rm -rf "${tmp}"
           sed -i "s/^readonly AQUA_INSTALLER_SHA256=\".*\"$/readonly AQUA_INSTALLER_SHA256=\"${sha}\"/" limen-install
 
-      - name: Push the update, if any
+      - name: Mint a push token, if the App is configured
+        # As in the canonical workflow: the minted token lives one hour and is
+        # scoped to this repository; the private key only ever mints. Guarded
+        # on the variable so a repo without the App falls through to the
+        # token chain below.
+        if: vars.UPDATE_AQUA_CHECKSUM_APP_ID != ''
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.UPDATE_AQUA_CHECKSUM_APP_ID }}
+          private-key: ${{ secrets.UPDATE_AQUA_CHECKSUM_APP_PRIVATE_KEY }}
+          permission-contents: write
+
+      - name: Commit the update through the API, if any
         env:
           BRANCH: ${{ github.ref_name }}
-          TOKEN: ${{ secrets.UPDATE_AQUA_CHECKSUM_TOKEN || github.token }}
+          TOKEN: ${{ steps.app-token.outputs.token || secrets.UPDATE_AQUA_CHECKSUM_TOKEN || github.token }}
         run: |
           [ -z "$(git status --porcelain)" ] && { echo "installer checksum already in sync"; exit 0; }
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add limen-install
+          # One file, one writer: the recompute step above only ever edits
+          # ./limen-install, so the payload is that file. createCommitOnBranch
+          # carries no file mode, and the script's executable bit survives
+          # because the mutation only replaces the blob of an existing path.
           # Signed-off-by: `just do lint commits` enforces DCO on the PR range,
           # bot commits included.
-          git commit -m "chore: recompute the aqua-installer checksum" \
-            -m "Signed-off-by: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"
-          git push "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:${BRANCH}"
+          payload="$(jq -n \
+            --arg query 'mutation ($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }' \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg branch "${BRANCH}" \
+            --arg head "$(git rev-parse HEAD)" \
+            --arg contents "$(base64 -w0 limen-install)" \
+            '{query: $query, variables: {input: {
+              branch: {repositoryNameWithOwner: $repository, branchName: $branch},
+              expectedHeadOid: $head,
+              message: {
+                headline: "chore: recompute the aqua-installer checksum",
+                body: "Signed-off-by: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"
+              },
+              fileChanges: {additions: [{path: "limen-install", contents: $contents}]}}}}')"
+          # GraphQL reports failure in-body over HTTP 200, so success is the
+          # presence of the new commit oid, never the HTTP status.
+          response="$(curl -sS -X POST -H "Authorization: bearer ${TOKEN}" \
+            -d "${payload}" https://api.github.com/graphql)"
+          oid="$(jq -r '.data.createCommitOnBranch.commit.oid // empty' <<<"${response}")"
+          if [ -z "${oid}" ]; then
+            echo "${response}" >&2
+            exit 1
+          fi
+          echo "pushed ${oid}"
