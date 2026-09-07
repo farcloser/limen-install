@@ -23,6 +23,13 @@ What it does:
 - **global config**: the aqua global config is written with `limen` as its sole package.
 - **tools**: `aqua install --all` installs limen.
 
+## Versioning
+
+There are no tags. The scripts are consumed by cloning this repository, or
+through [homebrew-brews](https://github.com/farcloser/homebrew-brews)'
+`Formula/limen.rb`, which pins a `revision` of this repository and is bumped
+by hand.
+
 ## Letting a coding agent contribute: limen-install-agent
 
 A second, optional bootstrap sets a machine up so a Claude Code session can

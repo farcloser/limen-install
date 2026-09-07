@@ -3,21 +3,14 @@
   extends: [
     "github>farcloser/limen#v0.1.1",
     "config:recommended",
-    // Default preset: detects owner/repo@ver and go-module packages in aqua.yaml,
-    // updates the standard-registry ref, and bumps aqua_version in CI/devcontainer too.
+    // Also bumps aqua_version in CI/devcontainer files, not only aqua.yaml.
     "github>aquaproj/aqua-renovate-config#2.13.0",
   ],
   // Supply-chain cooldown: wait before proposing a bump. Doubles as protection
   // against the race where a release tag exists but its assets aren't uploaded yet.
   minimumReleaseAge: "3 days",
-  // Vulnerability-fix PRs from GitHub's Dependabot alerts (the baseline keeps
-  // the alerts on for exactly this; Dependabot's OWN update PRs are off —
-  // Renovate is the one dependency bot). Stated explicitly, not left to the
-  // preset default, because `enabled: true` here is what reaches `// indirect`
-  // Go modules: the gomod manager disables indirect deps, and the alert path
-  // re-enables a dep only when this object says enabled. Fix PRs skip the
-  // cooldown above (a known-vulnerable version is the worse risk) and take
-  // the lowest fixed version, both Renovate defaults for this object.
+  // Explicit, not the preset default: Dependabot alerts stay on, Dependabot
+  // PRs off (Renovate is the one bot); fix PRs skip the cooldown above.
   vulnerabilityAlerts: {
     enabled: true,
   },
@@ -31,21 +24,11 @@
     "41898282+github-actions[bot]@users.noreply.github.com",
   ],
   customManagers: [
-    // The limen-install script carries pins of its own, each keyed on a
-    // marker comment. Leading-marker form — `# renovate: depName=…` above a
-    // `readonly NAME="ver"` line: today aquaproj/aqua-installer (whose
-    // companion sha256 is recomputed on Renovate's branches by
-    // update-installer-checksum.yaml; without that workflow the bump would
-    // fail checksum verification) and aquaproj/aqua (no checksum companion —
-    // the verified installer performs that download). Trailing-marker form —
-    // the farcloser/limen package pin inside the embedded global aqua config
-    // heredoc: Renovate groups it with the same dep's pin in aqua.yaml
-    // (managed by the aqua preset), so the repo's dev pin and what new
-    // machines install move in one PR; no checksum follow-up, the
-    // machine-side aqua-checksums.json is generated at install time, never
-    // committed here. (The equivalent pins in .github/actions/setup-aqua are
-    // deliberately NOT managed here: that file is limen-canonical, pinned
-    // byte-for-byte, and moves through limen baseline releases.)
+    // Two marker forms in ./limen-install: leading (`# renovate:` above a
+    // `readonly X="ver"`) and trailing (the farcloser/limen pin inside the
+    // heredoc, grouped with aqua.yaml's). aqua-installer's sha256 companion is
+    // recomputed by update-installer-checksum.yaml. setup-aqua's pins are
+    // deliberately NOT managed here: limen-canonical.
     {
       customType: "regex",
       managerFilePatterns: ["/^limen-install$/"],

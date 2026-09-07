@@ -2,32 +2,13 @@
 #
 # limen-install-agent — let a Claude Code session commit and push as a
 # dedicated bot identity: signed commits, over ssh, from inside its sandbox.
-#
-# The design (see limen's book/agents.md for the reasoning):
-#   - The bot's key lives in the Secure Enclave (Secretive) and is served by
-#     its agent over a unix socket. Non-exportable; no touch requirement —
-#     the repository rulesets (pull requests, signatures) are the veto, not a
-#     gesture the human ends up performing blindly.
-#   - Claude Code's sandbox may reach that ONE socket; ~/.ssh stays denied.
-#   - The bot identity (name, email, signing key) is injected as
-#     session-scoped git configuration, so the human's own git config is
-#     never touched and never sees the bot.
-#   - ssh from inside the sandbox needs two things the sandbox does not
-#     provide: an ssh that supports ECDSA (Apple's; the Homebrew OpenSSH is
-#     built without OpenSSL) and a ProxyCommand that authenticates to the
-#     sandbox's egress proxy (its own uses an unauthenticated `nc`, which the
-#     proxy refuses). Both are wired through core.sshCommand, plus a `git c`
-#     alias that drops the sandbox's GIT_SSH_COMMAND so core.sshCommand wins.
-#   - GitHub's host keys are pinned from its published list; no
-#     trust-on-first-use, and a changed key fails the connection.
+# Design and reasoning: limen's book/agents.md.
 #
 # Usage:
 #   limen-install-agent [--socket PATH] [--no-verify] <login> <email> <public-key-file>
 #
-# <login> and <email> are the bot's GitHub account (a machine user, invited as
-# an outside collaborator with write on the repositories it may touch), and
-# <public-key-file> its public key as exported by Secretive — registered on
-# that account BOTH as an authentication key and as a signing key.
+# <public-key-file> is the bot's key as exported by Secretive, registered on
+# <login> BOTH as an authentication key and as a signing key.
 #
 # Idempotent: re-run to converge after any change. macOS only (Secretive).
 
@@ -180,8 +161,6 @@ pin_github_host_keys() {
 }
 
 merge_settings() {
-  # Everything the session needs, merged into the existing settings.json:
-  # only the keys below are (re)written, everything else is preserved.
   mkdir -p "$CLAUDE_HOME"
   [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
   cp "$SETTINGS" "$SETTINGS.bak"
