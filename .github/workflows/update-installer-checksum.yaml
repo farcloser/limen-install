@@ -55,7 +55,7 @@ jobs:
           version="$(sed -n 's/^readonly AQUA_INSTALLER_VERSION="\(.*\)"$/\1/p' limen-install)"
           [ -n "$version" ] || { echo "could not extract AQUA_INSTALLER_VERSION from ./limen-install" >&2; exit 1; }
           tmp="$(mktemp -d)"
-          curl --proto '=https' --tlsv1.2 -fsSL -o "${tmp}/aqua-installer" \
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o "${tmp}/aqua-installer" \
             "https://raw.githubusercontent.com/aquaproj/aqua-installer/${version}/aqua-installer"
           sha="$(sha256sum "${tmp}/aqua-installer" | cut -d' ' -f1)"
           rm -rf "${tmp}"
@@ -102,7 +102,9 @@ jobs:
               fileChanges: {additions: [{path: "limen-install", contents: $contents}]}}}}')"
           # GraphQL reports failure in-body over HTTP 200, so success is the
           # presence of the new commit oid, never the HTTP status.
-          response="$(curl -sS -X POST -H "Authorization: bearer ${TOKEN}" \
+          # No --retry and no -L: a mutation guarded by expectedHeadOid, and a
+          # redirect must never replay a POST (same as the canonical workflow).
+          response="$(curl --proto '=https' --tlsv1.2 -fsS -X POST -H "Authorization: bearer ${TOKEN}" \
             -d "${payload}" https://api.github.com/graphql)"
           oid="$(jq -r '.data.createCommitOnBranch.commit.oid // empty' <<<"${response}")"
           if [ -z "${oid}" ]; then

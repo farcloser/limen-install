@@ -97,7 +97,7 @@ install_aqua() {
   fi
   log "installing aqua ${AQUA_VERSION} (installer ${AQUA_INSTALLER_VERSION})"
   local t; t="$(mktemp -d)"
-  curl --proto '=https' --tlsv1.2 -fsSL -o "$t/i" \
+  curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o "$t/i" \
     "https://raw.githubusercontent.com/aquaproj/aqua-installer/${AQUA_INSTALLER_VERSION}/aqua-installer"
   verify_sha256 "$t/i" "$AQUA_INSTALLER_SHA256"
   chmod +x "$t/i"; "$t/i" -v "$AQUA_VERSION"; rm -rf "$t"
