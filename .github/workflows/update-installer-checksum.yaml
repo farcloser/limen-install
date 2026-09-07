@@ -49,6 +49,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The digest below is the aqua-pinned coreutils sha256sum, not the runner's:
+      # the same two steps as ci.yaml put the hermetic tools on the PATH.
+      - uses: ./.github/actions/setup-aqua
+      - run: aqua install --only-link
 
       - name: Recompute the aqua-installer sha256 for the pinned version
         run: |
