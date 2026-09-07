@@ -27,7 +27,7 @@ packages:
   - name: lycheeverse/lychee@lychee-v0.24.2
   - name: github.com/vbatts/git-validation@v1.2.2
     registry: local
-  - name: github.com/goccy/go-graphviz/cmd/dot@v0.2.10
+  - name: github.com/goccy/go-graphviz/cmd/dot@v0.0.0-20251129032125-76e04975df88
     registry: local
   - name: github.com/farcloser/godolint/cmd/godolint@v0.1.0
     registry: local
