@@ -20,7 +20,7 @@
     "customManagers: two marker forms in ./limen-install — leading (`# renovate:` above a `readonly X=\"ver\"`) and trailing (the farcloser/limen pin inside the heredoc, grouped with aqua.yaml's). aqua-installer's sha256 companion is recomputed by update-installer-checksum.yaml. setup-aqua's pins are deliberately NOT managed here: they are limen-canonical."
   ],
   "extends": [
-    "github>farcloser/limen#v0.3.0"
+    "github>farcloser/limen#v0.4.0"
   ],
   "forkProcessing": "enabled",
   "gitIgnoredAuthors": [
