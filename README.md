@@ -25,10 +25,17 @@ What it does:
 
 ## Versioning
 
-There are no tags. The scripts are consumed by cloning this repository, or
-through [homebrew-brews](https://github.com/farcloser/homebrew-brews)'
-`Formula/limen.rb`, which pins a `revision` of this repository and is bumped
-by hand.
+A tag is the limen version the installer embeds: `vX.Y.Z` installs
+`farcloser/limen@vX.Y.Z` (the pin in `write_config`). A fix to the scripts
+between two limen bumps takes a fourth component, `vX.Y.Z.N`, which both
+Homebrew and Renovate order after `vX.Y.Z`. Tags are signed and cut by hand
+on `main`; `verify-tag` fails a tag whose first three components are not the
+embedded limen version. There are no release assets: a tag's source tarball
+is the release.
+
+[homebrew-brews](https://github.com/farcloser/homebrew-brews)'
+`Formula/limen.rb` installs from that tarball and takes its version from the
+tag, so `brew upgrade` follows every tag.
 
 ## Letting a coding agent contribute: limen-install-agent
 

@@ -1,0 +1,44 @@
+# A tag names the limen version the installer embeds (README, "Versioning"):
+# vX.Y.Z, or vX.Y.Z.N for a script fix between limen bumps. The tap installs
+# from the tag and reports it as limen's version, so a tag whose first three
+# components are not the embedded pin ships an installer that says one limen
+# and installs another. This fails that tag; it cannot unpush it.
+name: verify-tag
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: The tag is the embedded limen version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          [[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || {
+            echo "tag $TAG is neither vX.Y.Z nor vX.Y.Z.N" >&2
+            exit 1
+          }
+          limen=$(echo "${TAG#v}" | cut -d. -f1-3)
+          embedded=$(sed -n 's/^[[:space:]]*- name: farcloser\/limen@\(v[^[:space:]]*\).*/\1/p' limen-install)
+          [ -n "$embedded" ] || { echo "no farcloser/limen pin found in ./limen-install" >&2; exit 1; }
+          if [ "v$limen" != "$embedded" ]; then
+            echo "tag $TAG names limen v$limen, but ./limen-install embeds farcloser/limen@$embedded" >&2
+            exit 1
+          fi
+          echo "tag $TAG matches the embedded farcloser/limen@$embedded"
