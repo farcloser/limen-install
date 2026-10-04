@@ -5,3 +5,6 @@ import '.limen/just/main.just'
 lint: do::lint::default
 fix: do::fix::default
 test:
+
+# --- added by limen fix: the recipe the security workflow runs ---
+security: do::security::default
