@@ -67,7 +67,11 @@ jobs:
           BRANCH: ${{ github.ref_name }}
           TOKEN: ${{ steps.app-token.outputs.token || secrets.UPDATE_AQUA_CHECKSUM_TOKEN || github.token }}
         run: |
-          [ -z "$(git status --porcelain)" ] && { echo "installer checksum already in sync"; exit 0; }
+          # The file this workflow owns, never the whole tree: setup-aqua and
+          # the link step leave .aqua/aqua-checksums.json rewritten on a
+          # registry bump, and a whole-tree guard then committed this file
+          # unchanged, whose push re-fired the workflow, every thirty seconds.
+          git diff --quiet -- limen-install && { echo "installer checksum already in sync"; exit 0; }
           # One file, one writer: the recompute step above only ever edits
           # ./limen-install, so the payload is that file. createCommitOnBranch
           # carries no file mode, and the script's executable bit survives
