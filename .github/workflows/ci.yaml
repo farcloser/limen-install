@@ -1,15 +1,7 @@
-# DO NOT EDIT MANUALLY.
-# This workflow is generic — no project-specific content — and is destined to
-# become part of the canonical baseline limen distributes.
-#
-# Design: minimal GitHub glue around the same tooling every developer runs
-# locally. The only marketplace action is GitHub's own checkout, pinned by
-# commit SHA (a tag can be moved to malicious code; a SHA cannot). Everything
-# else is pinned, checksum-verified shell: aqua installs the repo's tools at
-# the versions aqua.yaml pins, and `just` runs the exact recipes a laptop
-# runs — CI green means the same thing as local green, by construction.
-# Deliberately absent: runner egress filtering — the available options are
-# third-party actions, which this workflow avoids on principle.
+# Seeded once by `limen fix`, then the project's own: limen never updates it.
+# The shared lanes (verify on every platform, fuzz, tools) live in
+# limen-verify.yaml, content-pinned and kept current by `limen fix`; this file
+# calls them, adds the project's own jobs, and gates on all of them.
 name: ci
 
 on:
@@ -27,84 +19,38 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Every run step is bash on every runner: without this, windows defaults to
-# PowerShell, which never sees the git-bash environment setup-aqua prepares
-# (the whole matrix is designed to run the recipes under git-bash). Explicit
-# bash also means `-eo pipefail` everywhere, which the implicit linux/macos
-# default lacks.
-defaults:
-  run:
-    shell: bash
-
 jobs:
-  verify:
-    strategy:
-      fail-fast: false
-      matrix:
-        # Pinned images, not -latest: a runner bump is a reviewed change.
-        # macOS is not redundant: its /bin/bash is 3.2, the portability floor
-        # the shared recipes target. arm64 (ubuntu-24.04-arm) and windows
-        # cover the rest of the supported release matrix — windows runs the
-        # recipes under git-bash.
-        # These names are NOT the ruleset's required contexts — the `gate` job
-        # below is, precisely so this list can change without touching any
-        # repository's branch protection.
-        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, windows-2025]
-    runs-on: ${{ matrix.os }}
-    # Generous for the windows leg: those runners are markedly slower, and the
-    # per-GOOS lint recipes now run three legs each.
-    timeout-minutes: 45
+  limen:
+    uses: ./.github/workflows/limen-verify.yaml
     permissions:
       contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # The token is not left behind in .git/config: nothing in this
-          # workflow talks to GitHub after checkout.
-          persist-credentials: false
-          # Full history and refs: `just do lint commits` validates the commit
-          # range against the PR's base branch, which a shallow clone lacks.
-          fetch-depth: 0
+    with:
+      # The project's list: the runners this installer is exercised on. No
+      # windows-11-arm leg, as before the lanes moved into limen-verify.yaml.
+      os: '["ubuntu-24.04", "ubuntu-24.04-arm", "macos-15", "windows-2025"]'
 
-      - name: Install aqua (pinned, checksum-verified)
-        uses: ./.github/actions/setup-aqua
-
-      - name: Install pinned tools
-        # Link-only: the shims download each tool lazily on first use (and it
-        # is verified against the committed aqua-checksums.json then), so a
-        # job only ever pays for the tools its recipes actually run.
-        run: aqua install --only-link
-
-      - name: Lint
-        run: just lint
-
-      - name: Test
-        run: just test
-
-  # The ONE required status check (see defaultRequiredChecks in
-  # internal/github/audit.go). Branch protection names contexts as strings, so
-  # requiring the matrix legs directly would bake this workflow's runner list
-  # into every repository's ruleset — and a project whose matrix differs then
-  # waits forever on checks that never report. This job collapses the matrix,
-  # whatever its shape, to a single stable name: change the legs above freely,
-  # the ruleset never moves.
+  # The ONE required status check (defaultRequiredChecks in
+  # internal/github/audit.go). Requiring the lanes by name would bake the
+  # runner list into every ruleset; this job collapses them to one stable
+  # name. A project job joins `needs` and the assertion below.
   gate:
-    needs: [verify]
+    needs: [limen]
     # always(), and the result asserted explicitly. Without always() a failed
     # or cancelled dependency SKIPS this job instead of failing it, and a
     # skipped required check does not block a merge — branch protection that
-    # quietly stops protecting. `needs.verify.result` is success only when
-    # every matrix leg succeeded.
+    # quietly stops protecting. `needs.limen.result` is success only when
+    # every lane it ran succeeded: each verify leg, fuzz and tools.
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}
     steps:
-      - name: Every verify leg succeeded
+      - name: Every lane succeeded
         env:
           # Via env, never interpolated into the script: the shell sees data,
           # not something the expression layer can rewrite into code.
-          RESULT: ${{ needs.verify.result }}
+          RESULT: ${{ needs.limen.result }}
+        shell: bash
         run: |
-          printf 'verify: %s\n' "$RESULT"
+          printf 'limen: %s\n' "$RESULT"
           [ "$RESULT" = "success" ]
