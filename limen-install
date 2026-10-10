@@ -10,6 +10,33 @@
 
 set -euo pipefail
 
+# On Windows (git-bash), aqua and its installer root at %LOCALAPPDATA%
+# (= $HOME/AppData/Local), not XDG's ~/.local/share — align with aqua's own
+# convention rather than pinning against it. That is the ONLY windows
+# accommodation needed: git-bash converts POSIX-form env values (paths and
+# even colon-lists) to native form when spawning native binaries, so the
+# config/policy exports below reach aqua.exe correctly as they are.
+case "$OSTYPE" in
+  msys*|cygwin*)
+    # shellcheck disable=SC2016
+    AQUA_BIN_EXPR='${AQUA_ROOT_DIR:-$HOME/AppData/Local/aquaproj-aqua}/bin' ;;
+  *)
+    # shellcheck disable=SC2016
+    AQUA_BIN_EXPR='${AQUA_ROOT_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/aquaproj-aqua}/bin' ;;
+esac
+readonly AQUA_BIN_EXPR
+
+# Every tool this script runs is the system's, for the whole run. On a machine
+# that already has limen, cat, mkdir, mktemp, rm, curl and the rest of coreutils
+# on PATH are aqua proxies, and a proxy parses the global config before it runs
+# anything: `cat > "$AQUA_GLOBAL_CONFIG" <<YAML` truncates that file before cat
+# starts, the proxy reads an empty YAML and fails, and set -e leaves the file
+# empty, which breaks every proxy on the machine. aqua's own directory comes
+# next, ahead of any other aqua (a brew one would break every recipe), for
+# `aqua` and, once installed, `limen`.
+PATH="/usr/bin:/bin:/usr/sbin:/sbin:$(eval echo "$AQUA_BIN_EXPR"):$PATH"
+export PATH
+
 # The version is Renovate-managed (see renovate.json5); the sha256 of the
 # installer script, which must change with it, is recomputed on Renovate's
 # branches by update-installer-checksum.yaml — the pair always moves together.
@@ -49,22 +76,6 @@ readonly POLICY_FILE="$CONFIG_DIR/aqua-policy.yaml"
 # aqua accepts a colon-separated list, and per-project policies prepend theirs.
 export AQUA_POLICY_CONFIG="$POLICY_FILE${AQUA_POLICY_CONFIG:+:$AQUA_POLICY_CONFIG}"
 
-# On Windows (git-bash), aqua and its installer root at %LOCALAPPDATA%
-# (= $HOME/AppData/Local), not XDG's ~/.local/share — align with aqua's own
-# convention rather than pinning against it. That is the ONLY windows
-# accommodation needed: git-bash converts POSIX-form env values (paths and
-# even colon-lists) to native form when spawning native binaries, so the
-# config/policy exports above reach aqua.exe correctly as they are.
-case "$OSTYPE" in
-  msys*|cygwin*)
-    # shellcheck disable=SC2016
-    AQUA_BIN_EXPR='${AQUA_ROOT_DIR:-$HOME/AppData/Local/aquaproj-aqua}/bin' ;;
-  *)
-    # shellcheck disable=SC2016
-    AQUA_BIN_EXPR='${AQUA_ROOT_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/aquaproj-aqua}/bin' ;;
-esac
-readonly AQUA_BIN_EXPR
-
 SHELL_CHANGED=0   # set to 1 if we modify the shell rc (→ advise opening a new shell)
 
 log() { printf '› %s\n' "$*"; }
@@ -98,7 +109,6 @@ install_aqua() {
     "https://raw.githubusercontent.com/aquaproj/aqua-installer/${AQUA_INSTALLER_VERSION}/aqua-installer"
   verify_sha256 "$t/i" "$AQUA_INSTALLER_SHA256"
   chmod +x "$t/i"; "$t/i" -v "$AQUA_VERSION"; rm -rf "$t"
-  eval "export PATH=\"$(eval echo "$AQUA_BIN_EXPR"):\$PATH\""
   ok "aqua ${AQUA_VERSION} installed"
 }
 
@@ -135,7 +145,6 @@ ensure_shell_config() {
     printf 'export AQUA_POLICY_CONFIG="%s${AQUA_POLICY_CONFIG:+:$AQUA_POLICY_CONFIG}"\n' "$policy_value" >> "$rc"
     SHELL_CHANGED=1
   fi
-  eval "export PATH=\"$(eval echo "$AQUA_BIN_EXPR"):\$PATH\""
 }
 
 # Renovate bumps the limen pin below, grouped with aqua.yaml's — do not
