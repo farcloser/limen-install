@@ -14,8 +14,8 @@ set -euo pipefail
 # installer script, which must change with it, is recomputed on Renovate's
 # branches by update-installer-checksum.yaml — the pair always moves together.
 # renovate: depName=aquaproj/aqua-installer
-readonly AQUA_INSTALLER_VERSION="v4.0.5"
-readonly AQUA_INSTALLER_SHA256="451028d56959cc738564885b1dbebc2691ea038ffde04e2472e4d486a3591146"
+readonly AQUA_INSTALLER_VERSION="v4.1.0"
+readonly AQUA_INSTALLER_SHA256="4d3e513d42f425609c1ead6ecd40b9c62492011979dfe23d7012428a59efbe82"
 
 # Keep in step with setup-aqua's pin. No checksum companion: the verified
 # installer above performs this download. Renovate-managed (see renovate.json5).
