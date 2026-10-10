@@ -102,13 +102,37 @@ install_aqua() {
   ok "aqua ${AQUA_VERSION} installed"
 }
 
+shell_rc() {
+  case "${SHELL##*/}" in
+    zsh)  echo "$HOME/.zshrc" ;;
+    bash) echo "$HOME/.bashrc" ;;
+    *)    echo "$HOME/.profile" ;;
+  esac
+}
+
+# Every directory this script writes under, probed with a real file before the
+# first step, so an unwritable target (a sandboxed job, a read-only home, a
+# config directory owned by someone else) stops the run before it has installed
+# or appended anything. A permission test is not enough: a sandbox denies the
+# open, not the mode bits.
+preflight_writes() {
+  local rc p dir probe
+  rc="$(shell_rc)"
+  for p in "$CONFIG_DIR" "$(eval echo "$AQUA_BIN_EXPR")" "${rc%/*}"; do
+    dir="$p"
+    while [ -n "$dir" ] && [ ! -d "$dir" ]; do dir="${dir%/*}"; done
+    : "${dir:=/}"
+    if ! probe="$(mktemp "$dir/.limen-install.XXXXXX" 2>/dev/null)"; then
+      err "cannot write under $dir"
+      exit 1
+    fi
+    rm -f "$probe"
+  done
+}
+
 ensure_shell_config() {
   local rc
-  case "${SHELL##*/}" in
-    zsh)  rc="$HOME/.zshrc" ;;
-    bash) rc="$HOME/.bashrc" ;;
-    *)    rc="$HOME/.profile" ;;
-  esac
+  rc="$(shell_rc)"
   # Guard with the exact literal we write (grep -F): the expression contains a
   # "}" between "aquaproj-aqua" and "/bin", so any looser hand-written pattern
   # silently never matches and the block gets re-appended on every run.
@@ -216,6 +240,7 @@ install_tools() {
   ok "scaffolder ready: $(limen version 2>/dev/null || echo 'open a new shell, then run: limen version')"
 }
 
+preflight_writes
 install_aqua
 ensure_shell_config
 write_config
