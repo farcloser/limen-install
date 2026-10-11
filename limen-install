@@ -196,8 +196,9 @@ write_config() {
 
   cat > "$AQUA_GLOBAL_CONFIG" <<'YAML'
 ---
-# Global aqua config — limen, the project scaffolder, nothing else.
-# Written by limen-install; edits are overwritten on the next run.
+# Global aqua config — the machine toolset: limen, the project scaffolder,
+# and OpenSSH with security keys built in. Written by limen-install;
+# edits are overwritten on the next run.
 checksum:
   enabled: true
   require_checksum: true
@@ -207,6 +208,8 @@ registries:
     path: registry.yaml
 packages:
   - name: farcloser/limen@v0.10.1 # renovate: depName=farcloser/limen
+    registry: farcloser
+  - name: forkcloser/openssh@v10.6.1 # renovate: depName=forkcloser/openssh
     registry: farcloser
 YAML
 
@@ -245,6 +248,40 @@ packages:
       - darwin
       - linux
       - windows
+  # OpenSSH with security keys built in, relocatable, darwin/arm64 only: aqua
+  # skips the package elsewhere. The entry is the one forkcloser/openssh's
+  # README carries; the release attests every asset and ships checksums.txt.
+  - type: github_release
+    repo_owner: forkcloser
+    repo_name: openssh
+    description: OpenSSH with security keys built in, relocatable, darwin/arm64 (forkcloser/openssh)
+    asset: openssh_{{trimV .Version}}_{{.OS}}_{{.Arch}}.tar.gz
+    format: tar.gz
+    files:
+      - name: ssh
+        src: openssh_{{trimV .Version}}_{{.OS}}_{{.Arch}}/bin/ssh
+      - name: ssh-agent
+        src: openssh_{{trimV .Version}}_{{.OS}}_{{.Arch}}/bin/ssh-agent
+      - name: ssh-add
+        src: openssh_{{trimV .Version}}_{{.OS}}_{{.Arch}}/bin/ssh-add
+      - name: ssh-keygen
+        src: openssh_{{trimV .Version}}_{{.OS}}_{{.Arch}}/bin/ssh-keygen
+      - name: ssh-keyscan
+        src: openssh_{{trimV .Version}}_{{.OS}}_{{.Arch}}/bin/ssh-keyscan
+      - name: scp
+        src: openssh_{{trimV .Version}}_{{.OS}}_{{.Arch}}/bin/scp
+      - name: sftp
+        src: openssh_{{trimV .Version}}_{{.OS}}_{{.Arch}}/bin/sftp
+      - name: ssh-agent-install
+        src: openssh_{{trimV .Version}}_{{.OS}}_{{.Arch}}/bin/ssh-agent-install
+    checksum:
+      type: github_release
+      asset: checksums.txt
+      algorithm: sha256
+    github_artifact_attestations:
+      signer_workflow: forkcloser/openssh/.github/workflows/release.yaml
+    supported_envs:
+      - darwin/arm64
 YAML
 
   cat > "$POLICY_FILE" <<'YAML'
@@ -265,6 +302,39 @@ install_tools() {
   aqua policy allow "$POLICY_FILE"
   (cd "$CONFIG_DIR" && aqua --log-level warn update-checksum --prune && aqua --log-level warn i -a)
   ok "scaffolder ready: $(limen version 2>/dev/null || echo 'open a new shell, then run: limen version')"
+}
+
+# The ssh-agent launchd agent runs the package by its real path (launchd has
+# no aqua proxy to resolve), so an upgrade leaves it on the old binary, whose
+# sk-helper then fails every signature. When the loaded agent's program is not
+# the pinned package's, the new package's ssh-agent-install moves it: bootout,
+# plist rewritten to its own path, bootstrap. The first install stays the
+# human's: a machine with no agent loaded is left alone, and so is an agent
+# running a package outside this aqua root (another HOME's install, a test).
+readonly SSH_AGENT_LABEL="org.forkcloser.ssh_agent"
+refresh_ssh_agent() {
+  is_macos || return 0
+  local pkg running root
+  pkg="$(cd "$CONFIG_DIR" && aqua which ssh-agent-install 2>/dev/null)" || return 0
+  pkg="${pkg%/bin/ssh-agent-install}"
+  root="$(eval echo "$AQUA_BIN_EXPR")"; root="${root%/bin}"
+  # launchctl exits 113 for a label it does not know, which pipefail would
+  # turn into this function's exit: an unloaded agent is a case, not an error.
+  running="$({ launchctl print "gui/$(id -u)/$SSH_AGENT_LABEL" 2>/dev/null || true; } | sed -n 's#^[[:space:]]*\(/.*\)/libexec/ssh-agent-launchd$#\1#p' | head -n 1)"
+  if [ -z "$running" ]; then
+    log "ssh-agent: no $SSH_AGENT_LABEL agent loaded; the first install is yours: ssh-agent-install"
+    return 0
+  fi
+  case "$running" in
+    "$root"/*) ;;
+    *) log "ssh-agent: $SSH_AGENT_LABEL runs $running, outside $root: left alone"; return 0 ;;
+  esac
+  if [ "$running" = "$pkg" ]; then
+    ok "ssh-agent: $SSH_AGENT_LABEL runs the pinned package"
+    return 0
+  fi
+  log "ssh-agent: $SSH_AGENT_LABEL runs $running, the pin is $pkg: reinstalling the agent"
+  (cd "$CONFIG_DIR" && ssh-agent-install)
 }
 
 # Writes the runner and the agent's plist, and (re)loads the agent when the
@@ -377,6 +447,7 @@ install_aqua
 ensure_shell_config
 write_config
 install_tools
+refresh_ssh_agent
 install_nightly
 if [ "$SHELL_CHANGED" = 1 ]; then
   ok "open a new shell to pick up PATH changes"
