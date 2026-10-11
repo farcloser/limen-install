@@ -223,7 +223,7 @@ registries:
 packages:
   - name: farcloser/limen@v0.11.0 # renovate: depName=farcloser/limen
     registry: farcloser
-  - name: forkcloser/openssh@v10.6.1 # renovate: depName=forkcloser/openssh
+  - name: forkcloser/openssh@v10.6.1.2 # renovate: depName=forkcloser/openssh
     registry: farcloser
 YAML
 
@@ -288,6 +288,10 @@ packages:
         src: openssh_{{trimV .Version}}_{{.OS}}_{{.Arch}}/bin/sftp
       - name: ssh-agent-install
         src: openssh_{{trimV .Version}}_{{.OS}}_{{.Arch}}/bin/ssh-agent-install
+      - name: sshd-install
+        src: openssh_{{trimV .Version}}_{{.OS}}_{{.Arch}}/bin/sshd-install
+      - name: sshd-uninstall
+        src: openssh_{{trimV .Version}}_{{.OS}}_{{.Arch}}/bin/sshd-uninstall
     checksum:
       type: github_release
       asset: checksums.txt
@@ -351,6 +355,44 @@ refresh_ssh_agent() {
     ok "ssh-agent: $SSH_AGENT_LABEL runs the pinned package"
   else
     err "ssh-agent: ssh-agent-install failed — from a logged-in terminal, run limen-install again"
+    LAUNCHD_FAILED=1
+  fi
+}
+
+# The server is the human's switch, never this script's: the package's
+# sshd-install turns it on, sshd-uninstall off, and launchd's state is the
+# only truth. An update keeps a loaded server on the pinned package the way it
+# keeps the agent — when gui/<uid>/org.forkcloser.sshd runs another package,
+# the pinned package's sshd-install moves it — and a server that is not loaded
+# is off: nothing is run, nothing is suggested. The program is read from
+# launchctl's own `program =` line, so the step does not depend on what the
+# package names its launchd entry point.
+readonly SSHD_LABEL="org.forkcloser.sshd"
+refresh_sshd() {
+  is_macos || return 0
+  local pkg program
+  pkg="$(cd "$CONFIG_DIR" && aqua which sshd-install 2>/dev/null)" || return 0
+  pkg="${pkg%/bin/sshd-install}"
+  program="$({ launchctl print "gui/$(id -u)/$SSHD_LABEL" 2>/dev/null || true; } | sed -n 's#^[[:space:]]*program = \(/.*\)$#\1#p' | head -n 1)"
+  if [ -z "$program" ]; then
+    log "sshd: $SSHD_LABEL not loaded; the server is off and stays off"
+    return 0
+  fi
+  case "$program" in
+    "$pkg"/*)
+      ok "sshd: $SSHD_LABEL runs the pinned package"
+      return 0
+      ;;
+  esac
+  if [ "${LIMEN_INSTALL_NO_LAUNCHD:-}" = 1 ]; then
+    log "sshd: LIMEN_INSTALL_NO_LAUNCHD is set; $SSHD_LABEL left on $program"
+    return 0
+  fi
+  log "sshd: $SSHD_LABEL runs $program, the pin is $pkg: moving the server onto it"
+  if (cd "$CONFIG_DIR" && sshd-install); then
+    ok "sshd: $SSHD_LABEL runs the pinned package"
+  else
+    err "sshd: sshd-install failed — from a logged-in terminal, run limen-install again"
     LAUNCHD_FAILED=1
   fi
 }
@@ -468,6 +510,7 @@ ensure_shell_config
 write_config
 install_tools
 refresh_ssh_agent
+refresh_sshd
 install_nightly
 if [ "$SHELL_CHANGED" = 1 ]; then
   ok "open a new shell to pick up PATH changes"
