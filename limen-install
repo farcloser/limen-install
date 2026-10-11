@@ -89,7 +89,7 @@ NIGHTLY_RUNNER="${XDG_DATA_HOME:-$HOME/.local/share}/limen-install/nightly"
 readonly NIGHTLY_RUNNER
 readonly NIGHTLY_PLIST="$HOME/Library/LaunchAgents/$NIGHTLY_LABEL.plist"
 readonly NIGHTLY_LOG="$HOME/Library/Logs/limen-install.log"
-NIGHTLY_FAILED=0  # set to 1 when the agent could not be loaded (→ exit 1 at the end)
+LAUNCHD_FAILED=0  # set to 1 when a service could not be loaded (→ exit 1 at the end)
 is_macos() { [ "$(uname -s)" = Darwin ]; }
 
 log() { printf '› %s\n' "$*"; }
@@ -305,36 +305,40 @@ install_tools() {
 }
 
 # The ssh-agent launchd agent runs the package by its real path (launchd has
-# no aqua proxy to resolve), so an upgrade leaves it on the old binary, whose
-# sk-helper then fails every signature. When the loaded agent's program is not
-# the pinned package's, the new package's ssh-agent-install moves it: bootout,
-# plist rewritten to its own path, bootstrap. The first install stays the
-# human's: a machine with no agent loaded is left alone, and so is an agent
-# running a package outside this aqua root (another HOME's install, a test).
+# no aqua proxy to resolve), so an upgrade would leave it on the old binary,
+# whose sk-helper then fails every signature. On macOS the agent is part of
+# the toolset: when the loaded agent is not the pinned package — none loaded,
+# an older one, a hand-unpacked one — the package's ssh-agent-install boots
+# the label out, writes the plist to its own path and bootstraps it. Only a
+# test holds back: the smoke installs into a throwaway HOME that shares the
+# machine's launchd domain, and it says so with LIMEN_INSTALL_NO_LAUNCHD,
+# which keeps every service, this one and the nightly job, unloaded.
 readonly SSH_AGENT_LABEL="org.forkcloser.ssh_agent"
 refresh_ssh_agent() {
   is_macos || return 0
-  local pkg running root
+  local pkg running
   pkg="$(cd "$CONFIG_DIR" && aqua which ssh-agent-install 2>/dev/null)" || return 0
   pkg="${pkg%/bin/ssh-agent-install}"
-  root="$(eval echo "$AQUA_BIN_EXPR")"; root="${root%/bin}"
   # launchctl exits 113 for a label it does not know, which pipefail would
   # turn into this function's exit: an unloaded agent is a case, not an error.
   running="$({ launchctl print "gui/$(id -u)/$SSH_AGENT_LABEL" 2>/dev/null || true; } | sed -n 's#^[[:space:]]*\(/.*\)/libexec/ssh-agent-launchd$#\1#p' | head -n 1)"
-  if [ -z "$running" ]; then
-    log "ssh-agent: no $SSH_AGENT_LABEL agent loaded; the first install is yours: ssh-agent-install"
-    return 0
-  fi
-  case "$running" in
-    "$root"/*) ;;
-    *) log "ssh-agent: $SSH_AGENT_LABEL runs $running, outside $root: left alone"; return 0 ;;
-  esac
   if [ "$running" = "$pkg" ]; then
     ok "ssh-agent: $SSH_AGENT_LABEL runs the pinned package"
     return 0
   fi
-  log "ssh-agent: $SSH_AGENT_LABEL runs $running, the pin is $pkg: reinstalling the agent"
-  (cd "$CONFIG_DIR" && ssh-agent-install)
+  if [ "${LIMEN_INSTALL_NO_LAUNCHD:-}" = 1 ]; then
+    log "ssh-agent: LIMEN_INSTALL_NO_LAUNCHD is set; $SSH_AGENT_LABEL left as it is (${running:-not loaded})"
+    return 0
+  fi
+  log "ssh-agent: $SSH_AGENT_LABEL ${running:+runs $running, }${running:-not loaded; }installing the pinned package's agent"
+  # Not fatal: ssh-agent-install ends in a launchctl bootstrap, which a session
+  # without the GUI domain (ssh) cannot do; said, and the run ends red.
+  if (cd "$CONFIG_DIR" && ssh-agent-install); then
+    ok "ssh-agent: $SSH_AGENT_LABEL runs the pinned package"
+  else
+    err "ssh-agent: ssh-agent-install failed — from a logged-in terminal, run limen-install again"
+    LAUNCHD_FAILED=1
+  fi
 }
 
 # Writes the runner and the agent's plist, and (re)loads the agent when the
@@ -427,6 +431,8 @@ PLIST
   domain="gui/$(id -u)"
   if [ "${LIMEN_INSTALL_NIGHTLY:-}" = 1 ]; then
     ok "nightly update job: runner refreshed (a changed plist loads at the next login)"
+  elif [ "${LIMEN_INSTALL_NO_LAUNCHD:-}" = 1 ]; then
+    log "nightly update job: LIMEN_INSTALL_NO_LAUNCHD is set; the plist is written and not loaded"
   elif [ "$changed" = 1 ] || ! launchctl print "$domain/$NIGHTLY_LABEL" >/dev/null 2>&1; then
     launchctl bootout "$domain/$NIGHTLY_LABEL" 2>/dev/null || true
     # Not fatal: the toolchain is installed by now, and a session without the
@@ -435,7 +441,7 @@ PLIST
       ok "nightly update job loaded: $NIGHTLY_LABEL at $(printf '%02d:%02d' "$NIGHTLY_HOUR" "$NIGHTLY_MINUTE"), log $NIGHTLY_LOG"
     else
       err "nightly update job not loaded: launchctl bootstrap $domain failed — from a logged-in terminal, run limen-install again"
-      NIGHTLY_FAILED=1
+      LAUNCHD_FAILED=1
     fi
   else
     ok "nightly update job: $NIGHTLY_LABEL loaded, unchanged"
@@ -452,8 +458,8 @@ install_nightly
 if [ "$SHELL_CHANGED" = 1 ]; then
   ok "open a new shell to pick up PATH changes"
 fi
-if [ "$NIGHTLY_FAILED" = 1 ]; then
-  err "done, except the nightly update job (above)"
+if [ "$LAUNCHD_FAILED" = 1 ]; then
+  err "done, except a service that could not be loaded (above)"
   exit 1
 fi
 ok "done"

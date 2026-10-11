@@ -35,9 +35,13 @@ installer-checksum:
 # nothing of this machine's: aqua and limen installed, the config written, the
 # rc appended, and on macOS the nightly agent's runner and plist written and
 # valid. Run from that HOME, as a user would, so no project manifest is in
-# reach. LIMEN_INSTALL_NIGHTLY keeps the plist out of this machine's launchd
-# domain, where it would collide with the real agent's label. TMPDIR and the
-# proxy variables pass through: the machine's, not the test's.
+# reach. On a developer machine LIMEN_INSTALL_NO_LAUNCHD keeps both services
+# out of the machine's launchd domain, where the nightly job would collide
+# with the real one's label and the ssh-agent step would replace the real
+# agent with a throwaway package; on a GitHub runner, thrown away after the
+# job, the knob is off and both services are loaded, checked and booted out:
+# the real path, tested. TMPDIR and the proxy variables pass through: the
+# machine's, not the test's.
 [unix]
 smoke:
     #!/usr/bin/env bash
@@ -49,7 +53,7 @@ smoke:
         GITHUB_TOKEN="${GITHUB_TOKEN:-}" AQUA_GITHUB_TOKEN="${AQUA_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}" \
         HTTP_PROXY="${HTTP_PROXY:-}" HTTPS_PROXY="${HTTPS_PROXY:-}" NO_PROXY="${NO_PROXY:-}" \
         http_proxy="${http_proxy:-}" https_proxy="${https_proxy:-}" no_proxy="${no_proxy:-}" \
-        LIMEN_INSTALL_NIGHTLY=1 bash "$script")
+        LIMEN_INSTALL_NO_LAUNCHD="$([ -n "${GITHUB_ACTIONS:-}" ] && echo 0 || echo 1)" bash "$script")
     test -s "$home/.config/aqua/aqua.yaml"
     grep -q AQUA_GLOBAL_CONFIG "$home/.bashrc"
     (cd "$home" && AQUA_GLOBAL_CONFIG="$home/.config/aqua/aqua.yaml" AQUA_POLICY_CONFIG="$home/.config/aqua/aqua-policy.yaml" \
@@ -58,6 +62,14 @@ smoke:
         test -x "$home/.local/share/limen-install/nightly"
         plutil -lint "$home/Library/LaunchAgents/world.farcloser.limen-install.plist"
         sh -n "$home/.local/share/limen-install/nightly"
+        if [ -n "${GITHUB_ACTIONS:-}" ]; then
+            domain="gui/$(id -u)"
+            for label in world.farcloser.limen-install org.forkcloser.ssh_agent; do
+                launchctl print "$domain/$label" > /dev/null
+                launchctl bootout "$domain/$label"
+            done
+            echo "limen-install: both services loaded on the runner and booted out"
+        fi
     fi
     echo "limen-install: end to end in a throwaway HOME, ok"
 
