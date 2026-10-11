@@ -51,13 +51,13 @@ no job yet: run the script by hand there.
 
 ## Versioning
 
-A tag is the limen version the installer embeds: `vX.Y.Z` installs
-`farcloser/limen@vX.Y.Z` (the pin in `write_config`). A fix to the scripts
-between two limen bumps takes a fourth component, `vX.Y.Z.N`, which both
-Homebrew and Renovate order after `vX.Y.Z`. Tags are signed and cut by hand
-on `main`; `verify-tag` fails a tag whose first three components are not the
-embedded limen version. There are no release assets: a tag's source tarball
-is the release.
+A tag is a version of this repository, on its own line: the script, the nightly
+job and the toolset it pins change at their own pace, and a tag says that
+something here changed, not which limen it installs. The limen it installs is
+the pin in `write_config`, which Renovate moves like the others; `limen
+version` on the machine is the answer to that question. Tags are signed and
+cut by hand on `main`. There are no release assets: a tag's source tarball is
+the release.
 
 [homebrew-brews](https://github.com/farcloser/homebrew-brews)'
 `Formula/limen.rb` installs from that tarball and takes its version from the
