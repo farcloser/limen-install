@@ -23,6 +23,17 @@ What it does:
 - **global config**: the aqua global config is written with `limen` as its sole package.
 - **tools**: `aqua install --all` installs limen.
 
+## The toolset
+
+The global aqua config pins the machine toolset: `limen`, and on macOS/arm64
+[forkcloser/openssh](https://github.com/forkcloser/openssh) — OpenSSH with security keys
+built in (`ssh`, `ssh-agent`, `ssh-add`, `ssh-keygen`, `ssh-keyscan`, `scp`, `sftp`,
+`ssh-agent-install`); aqua skips it elsewhere. Renovate moves both pins here, and a tag ships
+them to every machine the next night. The ssh-agent launchd agent (`org.forkcloser.ssh_agent`)
+runs the package by its real path, so the script reinstalls it with the new package's
+`ssh-agent-install` whenever the loaded agent is not the pinned one; the first install is
+yours, once: `ssh-agent-install`.
+
 ## The nightly update job (macOS)
 
 The first run installs a launchd agent, `world.farcloser.limen-install`, that re-runs the
