@@ -78,6 +78,20 @@ export AQUA_POLICY_CONFIG="$POLICY_FILE${AQUA_POLICY_CONFIG:+:$AQUA_POLICY_CONFI
 
 SHELL_CHANGED=0   # set to 1 if we modify the shell rc (→ advise opening a new shell)
 
+# The nightly update job, macOS only for now: a launchd agent that fetches the
+# latest release of this script over https and runs it. The runner lives under
+# XDG data, the agent's plist and log where launchd and Console look. Under
+# launchd the rc is never sourced, so the runner exports aqua's variables
+# itself, and LIMEN_INSTALL_NIGHTLY tells this script it is that run.
+readonly NIGHTLY_LABEL="world.farcloser.limen-install"
+readonly NIGHTLY_HOUR=4 NIGHTLY_MINUTE=17
+NIGHTLY_RUNNER="${XDG_DATA_HOME:-$HOME/.local/share}/limen-install/nightly"
+readonly NIGHTLY_RUNNER
+readonly NIGHTLY_PLIST="$HOME/Library/LaunchAgents/$NIGHTLY_LABEL.plist"
+readonly NIGHTLY_LOG="$HOME/Library/Logs/limen-install.log"
+NIGHTLY_FAILED=0  # set to 1 when the agent could not be loaded (→ exit 1 at the end)
+is_macos() { [ "$(uname -s)" = Darwin ]; }
+
 log() { printf '› %s\n' "$*"; }
 ok()  { printf '✓ %s\n' "$*"; }
 err() { printf '✗ %s\n' "$*" >&2; }
@@ -113,9 +127,9 @@ install_aqua() {
 }
 
 shell_rc() {
-  case "${SHELL##*/}" in
-    zsh)  echo "$HOME/.zshrc" ;;
-    bash) echo "$HOME/.bashrc" ;;
+  case "${SHELL:-}" in
+    */zsh|zsh)  echo "$HOME/.zshrc" ;;
+    */bash|bash) echo "$HOME/.bashrc" ;;
     *)    echo "$HOME/.profile" ;;
   esac
 }
@@ -128,7 +142,11 @@ shell_rc() {
 preflight_writes() {
   local rc p dir probe
   rc="$(shell_rc)"
-  for p in "$CONFIG_DIR" "$(eval echo "$AQUA_BIN_EXPR")" "${rc%/*}"; do
+  set -- "$CONFIG_DIR" "$(eval echo "$AQUA_BIN_EXPR")" "${rc%/*}"
+  if is_macos; then
+    set -- "$@" "${NIGHTLY_RUNNER%/*}" "${NIGHTLY_PLIST%/*}" "${NIGHTLY_LOG%/*}"
+  fi
+  for p in "$@"; do
     dir="$p"
     while [ -n "$dir" ] && [ ! -d "$dir" ]; do dir="${dir%/*}"; done
     : "${dir:=/}"
@@ -249,12 +267,122 @@ install_tools() {
   ok "scaffolder ready: $(limen version 2>/dev/null || echo 'open a new shell, then run: limen version')"
 }
 
+# Writes the runner and the agent's plist, and (re)loads the agent when the
+# plist is new or changed. Not from inside the nightly run itself: a bootout
+# there kills the very job that is running, and launchd reads the rewritten
+# plist at the next login anyway.
+install_nightly() {
+  if ! is_macos; then
+    log "nightly update job: macOS only for now (launchd); nothing installed"
+    return
+  fi
+
+  mkdir -p "${NIGHTLY_RUNNER%/*}" "${NIGHTLY_PLIST%/*}" "${NIGHTLY_LOG%/*}"
+
+  # Written beside and moved into place: the nightly run is this very runner,
+  # still being read by its shell, and a longer text written over it would be
+  # executed from the wrong offset.
+  local runner
+  runner="$(mktemp "${NIGHTLY_RUNNER%/*}/.nightly.XXXXXX")"
+  cat > "$runner" <<RUNNER
+#!/bin/sh
+# Written by limen-install; overwritten on each run. The nightly job: fetch
+# the latest release of limen-install over https and run it. No clone, no
+# credential, no key: the trust is TLS to github.com and the ruleset that
+# restricts v* tags to the repository's admins.
+set -eu
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
+export PATH
+# The log is launchd's open file: trimmed in place, never replaced.
+log="$NIGHTLY_LOG"
+if [ -f "\$log" ] && [ "\$(wc -c < "\$log")" -gt 1048576 ]; then
+  tail -c 262144 "\$log" > "\$log.trim" && cat "\$log.trim" > "\$log" && rm -f "\$log.trim"
+fi
+export AQUA_GLOBAL_CONFIG="$AQUA_GLOBAL_CONFIG"
+export AQUA_POLICY_CONFIG="$POLICY_FILE"
+export LIMEN_INSTALL_NIGHTLY=1
+url=\$(curl --proto '=https' --tlsv1.2 -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/farcloser/limen-install/releases/latest)
+tag=\${url##*/}
+case "\$tag" in
+  v*) ;;
+  *) echo "limen-install nightly: no release tag behind \$url" >&2; exit 1 ;;
+esac
+t=\$(mktemp -d)
+trap 'rm -rf "\$t"' EXIT
+curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o "\$t/limen-install" \
+  "https://raw.githubusercontent.com/farcloser/limen-install/\$tag/limen-install"
+echo "limen-install nightly: \$(date -u +%Y-%m-%dT%H:%M:%SZ) running \$tag"
+bash "\$t/limen-install"
+RUNNER
+  chmod 755 "$runner"
+  mv "$runner" "$NIGHTLY_RUNNER"
+
+  local plist
+  plist="$(mktemp)"
+  cat > "$plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$NIGHTLY_LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>$NIGHTLY_RUNNER</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>$NIGHTLY_HOUR</integer>
+    <key>Minute</key>
+    <integer>$NIGHTLY_MINUTE</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>$NIGHTLY_LOG</string>
+  <key>StandardErrorPath</key>
+  <string>$NIGHTLY_LOG</string>
+</dict>
+</plist>
+PLIST
+
+  local changed=1
+  if [ -f "$NIGHTLY_PLIST" ] && cmp -s "$plist" "$NIGHTLY_PLIST"; then
+    changed=0
+  fi
+  mv "$plist" "$NIGHTLY_PLIST"
+  chmod 644 "$NIGHTLY_PLIST"
+
+  local domain
+  domain="gui/$(id -u)"
+  if [ "${LIMEN_INSTALL_NIGHTLY:-}" = 1 ]; then
+    ok "nightly update job: runner refreshed (a changed plist loads at the next login)"
+  elif [ "$changed" = 1 ] || ! launchctl print "$domain/$NIGHTLY_LABEL" >/dev/null 2>&1; then
+    launchctl bootout "$domain/$NIGHTLY_LABEL" 2>/dev/null || true
+    # Not fatal: the toolchain is installed by now, and a session without the
+    # GUI domain (ssh) cannot load a user agent; said, and the run ends red.
+    if launchctl bootstrap "$domain" "$NIGHTLY_PLIST"; then
+      ok "nightly update job loaded: $NIGHTLY_LABEL at $(printf '%02d:%02d' "$NIGHTLY_HOUR" "$NIGHTLY_MINUTE"), log $NIGHTLY_LOG"
+    else
+      err "nightly update job not loaded: launchctl bootstrap $domain failed — from a logged-in terminal, run limen-install again"
+      NIGHTLY_FAILED=1
+    fi
+  else
+    ok "nightly update job: $NIGHTLY_LABEL loaded, unchanged"
+  fi
+}
+
 preflight_writes
 install_aqua
 ensure_shell_config
 write_config
 install_tools
+install_nightly
 if [ "$SHELL_CHANGED" = 1 ]; then
   ok "open a new shell to pick up PATH changes"
+fi
+if [ "$NIGHTLY_FAILED" = 1 ]; then
+  err "done, except the nightly update job (above)"
+  exit 1
 fi
 ok "done"

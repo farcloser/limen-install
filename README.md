@@ -23,6 +23,19 @@ What it does:
 - **global config**: the aqua global config is written with `limen` as its sole package.
 - **tools**: `aqua install --all` installs limen.
 
+## The nightly update job (macOS)
+
+The first run installs a launchd agent, `world.farcloser.limen-install`, that re-runs the
+latest release of this script every night (04:17 local; log in
+`~/Library/Logs/limen-install.log`). It fetches the script over plain https from the
+release tag — no clone, no credential, no key: the trust is TLS to github.com and the
+ruleset that lets only the repository's admins create a `v*` tag — and runs it with the
+system's tools first on `PATH` and aqua's variables exported, since launchd sources no rc.
+Renovate moves the pins in this repository; a tag ships them to every machine the next
+night. The agent is reloaded when its plist changes, except from inside the nightly run
+itself (that would kill the running job; the next login loads it). Linux and Windows get
+no job yet: run the script by hand there.
+
 ## Versioning
 
 A tag is the limen version the installer embeds: `vX.Y.Z` installs
