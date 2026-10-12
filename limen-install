@@ -34,7 +34,7 @@ readonly AQUA_BIN_EXPR
 # empty, which breaks every proxy on the machine. aqua's own directory comes
 # next, ahead of any other aqua (a brew one would break every recipe), for
 # `aqua` and, once installed, `limen`.
-PATH="/usr/bin:/bin:/usr/sbin:/sbin:$(eval echo "$AQUA_BIN_EXPR"):$PATH"
+PATH="/usr/bin:/bin:/usr/sbin:/sbin:$(eval "echo \"$AQUA_BIN_EXPR\""):$PATH"
 export PATH
 
 # The version is Renovate-managed (see renovate.json5); the sha256 of the
@@ -142,7 +142,7 @@ shell_rc() {
 preflight_writes() {
   local rc p dir probe
   rc="$(shell_rc)"
-  set -- "$CONFIG_DIR" "$(eval echo "$AQUA_BIN_EXPR")" "${rc%/*}"
+  set -- "$CONFIG_DIR" "$(eval "echo \"$AQUA_BIN_EXPR\"")" "${rc%/*}"
   if is_macos; then
     set -- "$@" "${NIGHTLY_RUNNER%/*}" "${NIGHTLY_PLIST%/*}" "${NIGHTLY_LOG%/*}"
   fi
