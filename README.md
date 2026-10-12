@@ -112,6 +112,24 @@ What it does (idempotent — re-run to converge):
   wrapper as `gpg.ssh.program` (the Homebrew OpenSSH is built without OpenSSL
   and cannot use an ECDSA key; Apple's can), `core.sshCommand` with the agent
   pinned, and a `git c` alias. The human's own git config is never touched.
+- **The sessions' tool root** (`--agent-root`, default `~/.local/share/limen-agent`):
+  aqua's root, a home for the verifiers, and the Go, cargo and XDG caches, all a
+  session may write, so nothing a sandboxed command writes is ever executed
+  outside the sandbox. `--write DIR` is required and repeatable: a directory
+  sessions may write, exactly as given, where the checkouts live; no default, the
+  layout is the machine's. The settings `env` points `AQUA_ROOT_DIR`, `GOPATH`,
+  `GOMODCACHE`, `GOCACHE`, `CARGO_HOME`, `XDG_CACHE_HOME` and `LIMEN_AGENT_HOME`
+  (the home: slsa-verifier keeps its TUF cache under `$HOME/.sigstore` and reads
+  no other variable) into the root; the sandbox's write list becomes the `--write`
+  directories plus the root, and the human's aqua root, Go caches, cargo and
+  sigstore cache leave it. The root gets aqua at the machine's version and nothing
+  per repository: a session approves a checkout's policy and installs its pins
+  itself, into the root. The shell rc (`--rc`, default by `$SHELL`) gets one line
+  putting the root's `bin` first on `PATH` when `CLAUDECODE` is set, which the
+  session's shell snapshot carries. Two `permissions.deny` rules keep file tools
+  out of `~/.claude`, and the hand-kept hook that auto-allowed sandboxed commands
+  is dropped from the settings (the sandbox auto-allows them itself); its file is
+  left for the human.
 - **Verification**: the agent serves the key, and GitHub authenticates it as
   the bot.
 

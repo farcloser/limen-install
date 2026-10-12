@@ -13,7 +13,15 @@
 # depends on the environment variable reaching the session.
 #
 # Usage:
-#   limen-install-agent [--socket PATH] [--no-verify] <login> <email> <public-key-file>
+#   limen-install-agent --write DIR [--write DIR]... [--socket PATH] [--agent-root DIR]
+#                       [--rc FILE] [--no-verify] <login> <email> <public-key-file>
+#
+# The sessions' tool root (--agent-root, default ~/.local/share/limen-agent): aqua's
+# root, a home for the verifiers, the Go, cargo and XDG caches. A session may write
+# it and every --write directory, exactly as given, and nothing else of the human's;
+# the human's own tool roots leave the sandbox's write list. The root gets aqua and
+# nothing per repository: sessions approve policies and install pins themselves.
+# Design: limen's book/identity.md, "The bot's sandbox".
 #
 # <public-key-file> is the bot's key as exported by Secretive, registered on
 # <login> BOTH as an authentication key and as a signing key.
@@ -28,9 +36,15 @@ err() { printf '✗ %s\n' "$*" >&2; }
 
 SECRETIVE_SOCKET="$HOME/Library/Containers/com.maxgoedjen.Secretive.SecretAgent/Data/socket.ssh"
 VERIFY=1
+AGENT_ROOT="$HOME/.local/share/limen-agent"
+WRITE=()
+RC_FILE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --socket) SECRETIVE_SOCKET="$2"; shift 2 ;;
+    --agent-root) AGENT_ROOT="$2"; shift 2 ;;
+    --write) WRITE+=("${2%/}"); shift 2 ;;
+    --rc) RC_FILE="$2"; shift 2 ;;
     --no-verify) VERIFY=0; shift ;;
     --) shift; break ;;
     -*) err "unknown option: $1"; exit 2 ;;
@@ -38,9 +52,11 @@ while [ $# -gt 0 ]; do
   esac
 done
 if [ $# -ne 3 ]; then
-  err "usage: limen-install-agent [--socket PATH] [--no-verify] <login> <email> <public-key-file>"
+  err "usage: limen-install-agent --write DIR [--write DIR]... [--socket PATH] [--agent-root DIR] [--rc FILE] [--no-verify] <login> <email> <public-key-file>"
   exit 2
 fi
+[ ${#WRITE[@]} -gt 0 ] || { err "--write DIR is required: a directory sessions may write, the checkouts live under it (repeat for several)"; exit 2; }
+for d in "${WRITE[@]}"; do [ -d "$d" ] || { err "--write $d: not a directory"; exit 2; }; done
 readonly BOT_LOGIN="$1" BOT_EMAIL="$2" BOT_KEY_FILE="$3"
 BOT_KEY="$(head -n 1 "$BOT_KEY_FILE")"
 readonly BOT_KEY
@@ -50,9 +66,10 @@ case "$BOT_KEY" in
 esac
 
 [ "$(uname -s)" = Darwin ] || { err "macOS only: the bot key lives in the Secure Enclave (Secretive)"; exit 1; }
-for tool in python3 curl; do
-  command -v "$tool" >/dev/null 2>&1 || { err "$tool is required (the ProxyCommand helper and the settings merge are python3; curl fetches GitHub's host keys)"; exit 1; }
+for tool in python3 curl aqua; do
+  command -v "$tool" >/dev/null 2>&1 || { err "$tool is required (the ProxyCommand helper and the settings merge are python3; curl fetches GitHub's host keys; aqua populates the sessions' tool root)"; exit 1; }
 done
+readonly AGENT_ROOT WRITE
 
 # Claude Code's configuration home; CLAUDE_CONFIG_DIR is its own override.
 readonly CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
@@ -60,6 +77,16 @@ readonly HELPER="$CLAUDE_HOME/bin/ssh-connect-proxy"
 readonly SIGNER="$CLAUDE_HOME/bin/ssh-keygen-agent"
 readonly KNOWN_HOSTS="$CLAUDE_HOME/known_hosts"
 readonly SETTINGS="$CLAUDE_HOME/settings.json"
+readonly AGENT_AQUA="$AGENT_ROOT/aqua" AGENT_HOME="$AGENT_ROOT/home"
+
+shell_rc() {
+  [ -n "$RC_FILE" ] && { echo "$RC_FILE"; return; }
+  case "${SHELL:-}" in
+    */zsh|zsh)  echo "$HOME/.zshrc" ;;
+    */bash|bash) echo "$HOME/.bashrc" ;;
+    *)    echo "$HOME/.profile" ;;
+  esac
+}
 
 install_helper() {
   mkdir -p "$CLAUDE_HOME/bin"
@@ -183,6 +210,31 @@ pin_github_host_keys() {
   ok "GitHub host keys pinned: $KNOWN_HOSTS ($(grep -c '^github.com ' "$KNOWN_HOSTS") keys)"
 }
 
+# aqua goes into the root here, outside any sandbox, with HOME pointed into it so
+# the verifiers' TUF cache lands there too (slsa-verifier reads no other variable);
+# the same aqua version the machine runs. Nothing per repository: a session
+# approves a checkout's policy and installs its pins itself, into this root.
+install_agent_root() {
+  mkdir -p "$AGENT_AQUA" "$AGENT_HOME" "$AGENT_ROOT/go" "$AGENT_ROOT/go-build" "$AGENT_ROOT/cargo" "$AGENT_ROOT/cache"
+  local version
+  version="v$(aqua -v | awk '{print $3}')"
+  HOME="$AGENT_HOME" AQUA_ROOT_DIR="$AGENT_AQUA" aqua update-aqua "$version" >/dev/null
+  ok "sessions' tool root: $AGENT_ROOT (aqua $version)"
+}
+
+# Inside a session every tool resolves through the sessions' root first. The
+# snapshot Claude Code takes of the login shell runs this rc with CLAUDECODE set.
+ensure_agent_rc() {
+  local rc marker
+  rc="$(shell_rc)"
+  marker='# limen-install-agent: a Claude Code session resolves tools through its own root'
+  if ! grep -qF "$marker" "$rc" 2>/dev/null; then
+    # shellcheck disable=SC2016
+    printf '\n%s\n[ -n "${CLAUDECODE:-}" ] && export PATH="%s/bin:$PATH"\n' "$marker" "$AGENT_AQUA" >> "$rc"
+    ok "shell rc: sessions put $AGENT_AQUA/bin first on PATH ($rc)"
+  fi
+}
+
 merge_settings() {
   mkdir -p "$CLAUDE_HOME"
   [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
@@ -192,6 +244,7 @@ merge_settings() {
   # sandbox rewrites it); IdentitiesOnly=no lets the agent's key be offered.
   ssh_command="/usr/bin/ssh -o IdentityAgent=$SECRETIVE_SOCKET -o IdentitiesOnly=no -o ProxyCommand='python3 $HELPER %h %p' -o UserKnownHostsFile=$KNOWN_HOSTS -o StrictHostKeyChecking=yes -o ControlMaster=no -o ControlPath=none"
   SOCKET="$SECRETIVE_SOCKET" LOGIN="$BOT_LOGIN" EMAIL="$BOT_EMAIL" KEY="$BOT_KEY" SSHCMD="$ssh_command" SIGNER_PATH="$SIGNER" \
+  ROOT="$AGENT_ROOT" WRITE_DIRS="$(printf '%s\n' "${WRITE[@]}")" CONFIG_HOME="$CLAUDE_HOME" USER_HOME="$HOME" \
   python3 - "$SETTINGS" <<'PY'
 import json, os, sys
 path = sys.argv[1]
@@ -224,6 +277,41 @@ env["SSH_AUTH_SOCK"] = os.environ["SOCKET"]
 sockets = settings.setdefault("sandbox", {}).setdefault("network", {}).setdefault("allowUnixSockets", [])
 if os.environ["SOCKET"] not in sockets:
     sockets.append(os.environ["SOCKET"])
+# The sessions' tool root: every tool a session runs or caches resolves there.
+root = os.environ["ROOT"]
+for key in ("AQUA_ROOT_DIR", "LIMEN_AGENT_HOME", "GOPATH", "GOMODCACHE", "GOCACHE", "CARGO_HOME", "XDG_CACHE_HOME"):
+    env.pop(key, None)  # re-added below in a fixed order, so a re-run rewrites nothing
+env.update({
+    "AQUA_ROOT_DIR": root + "/aqua",
+    "LIMEN_AGENT_HOME": root + "/home",
+    "GOPATH": root + "/go",
+    "GOMODCACHE": root + "/go/pkg/mod",
+    "GOCACHE": root + "/go-build",
+    "CARGO_HOME": root + "/cargo",
+    "XDG_CACHE_HOME": root + "/cache",
+})
+# The write list: the --write directories as given, and the root. The human's
+# own tool roots and TMPDIR leave it; anything this script does not know stays.
+home = os.environ["USER_HOME"]
+def tilde(p):
+    return "~" + p[len(home):] if p.startswith(home + "/") else p
+writes = [tilde(w) for w in os.environ["WRITE_DIRS"].split("\n") if w]
+known = {"~/go", "~/Applications/go", "~/Library/Caches/go-build",
+         "~/.local/share/aquaproj-aqua", "~/.cache/gh", "~/.sigstore", "~/.cargo"}
+fs = settings.setdefault("sandbox", {}).setdefault("filesystem", {})
+kept = [p for p in fs.get("allowWrite", []) if p not in known and not p.startswith("/var/folders/")]
+fs["allowWrite"] = writes + [tilde(root)] + [p for p in kept if p not in writes and p != tilde(root)]
+# No session edits its own permission machinery with a file tool.
+deny = settings.setdefault("permissions", {}).setdefault("deny", [])
+config_home = os.environ["CONFIG_HOME"].lstrip("/")  # rule syntax: //absolute/path
+for rule in ("Edit(//" + config_home + "/**)", "Write(//" + config_home + "/**)"):
+    if rule not in deny:
+        deny.append(rule)
+# The hand-kept hook that auto-allowed sandboxed commands is retired: the
+# sandbox itself auto-allows them, and its exclusion regex drifted from
+# excludedCommands. The file is left for the human.
+pre = settings.get("hooks", {}).get("PreToolUse", [])
+settings.get("hooks", {})["PreToolUse"] = [h for h in pre if "allow-sandboxed-bash" not in json.dumps(h)] if pre else pre
 with open(path, "w") as f:
     json.dump(settings, f, indent=2)
     f.write("\n")
@@ -253,7 +341,9 @@ verify() {
 
 install_helper
 pin_github_host_keys
+install_agent_root
 merge_settings
+ensure_agent_rc
 if [ "$VERIFY" = 1 ]; then verify; fi
 ok "done — restart Claude Code sessions to pick up the settings"
 log "remaining, on GitHub: invite $BOT_LOGIN as an outside collaborator (write) on each repository it may push to"
