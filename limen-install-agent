@@ -14,7 +14,7 @@
 #
 # Usage:
 #   limen-install-agent --write DIR [--write DIR]... [--socket PATH] [--agent-root DIR]
-#                       [--rc FILE] [--no-verify] <login> <email> <public-key-file>
+#                       [--no-verify] <login> <email> <public-key-file>
 #
 # The sessions' tool root (--agent-root, default ~/.local/share/limen-agent): aqua's
 # root, a home for the verifiers, the Go, cargo and XDG caches. A session may write
@@ -38,13 +38,11 @@ SECRETIVE_SOCKET="$HOME/Library/Containers/com.maxgoedjen.Secretive.SecretAgent/
 VERIFY=1
 AGENT_ROOT="$HOME/.local/share/limen-agent"
 WRITE=()
-RC_FILE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --socket) SECRETIVE_SOCKET="$2"; shift 2 ;;
     --agent-root) AGENT_ROOT="$2"; shift 2 ;;
     --write) WRITE+=("${2%/}"); shift 2 ;;
-    --rc) RC_FILE="$2"; shift 2 ;;
     --no-verify) VERIFY=0; shift ;;
     --) shift; break ;;
     -*) err "unknown option: $1"; exit 2 ;;
@@ -52,7 +50,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 if [ $# -ne 3 ]; then
-  err "usage: limen-install-agent --write DIR [--write DIR]... [--socket PATH] [--agent-root DIR] [--rc FILE] [--no-verify] <login> <email> <public-key-file>"
+  err "usage: limen-install-agent --write DIR [--write DIR]... [--socket PATH] [--agent-root DIR] [--no-verify] <login> <email> <public-key-file>"
   exit 2
 fi
 [ ${#WRITE[@]} -gt 0 ] || { err "--write DIR is required: a directory sessions may write, the checkouts live under it (repeat for several)"; exit 2; }
@@ -78,15 +76,6 @@ readonly SIGNER="$CLAUDE_HOME/bin/ssh-keygen-agent"
 readonly KNOWN_HOSTS="$CLAUDE_HOME/known_hosts"
 readonly SETTINGS="$CLAUDE_HOME/settings.json"
 readonly AGENT_AQUA="$AGENT_ROOT/aqua" AGENT_HOME="$AGENT_ROOT/home"
-
-shell_rc() {
-  [ -n "$RC_FILE" ] && { echo "$RC_FILE"; return; }
-  case "${SHELL:-}" in
-    */zsh|zsh)  echo "$HOME/.zshrc" ;;
-    */bash|bash) echo "$HOME/.bashrc" ;;
-    *)    echo "$HOME/.profile" ;;
-  esac
-}
 
 install_helper() {
   mkdir -p "$CLAUDE_HOME/bin"
@@ -222,19 +211,6 @@ install_agent_root() {
   ok "sessions' tool root: $AGENT_ROOT (aqua $version)"
 }
 
-# Inside a session every tool resolves through the sessions' root first. The
-# snapshot Claude Code takes of the login shell runs this rc with CLAUDECODE set.
-ensure_agent_rc() {
-  local rc marker
-  rc="$(shell_rc)"
-  marker='# limen-install-agent: a Claude Code session resolves tools through its own root'
-  if ! grep -qF "$marker" "$rc" 2>/dev/null; then
-    # shellcheck disable=SC2016
-    printf '\n%s\n[ -n "${CLAUDECODE:-}" ] && export PATH="%s/bin:$PATH"\n' "$marker" "$AGENT_AQUA" >> "$rc"
-    ok "shell rc: sessions put $AGENT_AQUA/bin first on PATH ($rc)"
-  fi
-}
-
 merge_settings() {
   mkdir -p "$CLAUDE_HOME"
   [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
@@ -343,7 +319,6 @@ install_helper
 pin_github_host_keys
 install_agent_root
 merge_settings
-ensure_agent_rc
 if [ "$VERIFY" = 1 ]; then verify; fi
 ok "done — restart Claude Code sessions to pick up the settings"
 log "remaining, on GitHub: invite $BOT_LOGIN as an outside collaborator (write) on each repository it may push to"
