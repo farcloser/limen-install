@@ -277,12 +277,19 @@ known = {"~/go", "~/Applications/go", "~/Library/Caches/go-build",
 fs = settings.setdefault("sandbox", {}).setdefault("filesystem", {})
 kept = [p for p in fs.get("allowWrite", []) if p not in known and not p.startswith("/var/folders/")]
 fs["allowWrite"] = writes + [tilde(root)] + [p for p in kept if p not in writes and p != tilde(root)]
-# No session edits its own permission machinery with a file tool.
+# The file tools follow permission rules, not the sandbox, and a deny beats every
+# allow, so the rules name what no session may write: every dotfile and dot
+# directory of the human's home (the Claude Code config, the shell rc files,
+# .gitconfig, .ssh), the launch agents, and each project's own settings and hooks.
 deny = settings.setdefault("permissions", {}).setdefault("deny", [])
-config_home = os.environ["CONFIG_HOME"].lstrip("/")  # rule syntax: //absolute/path
-for rule in ("Edit(//" + config_home + "/**)", "Write(//" + config_home + "/**)"):
-    if rule not in deny:
-        deny.append(rule)
+user_home = home.lstrip("/")  # rule syntax: //absolute/path
+for target in ("//" + user_home + "/.*", "//" + user_home + "/.*/**",
+               "//" + user_home + "/Library/LaunchAgents/**",
+               "./.claude/settings.json", "./.claude/settings.local.json", "./.claude/hooks/**"):
+    for tool in ("Edit", "Write"):
+        rule = tool + "(" + target + ")"
+        if rule not in deny:
+            deny.append(rule)
 # The hand-kept hook that auto-allowed sandboxed commands is retired: the
 # sandbox itself auto-allows them, and its exclusion regex drifted from
 # excludedCommands. The file is left for the human.
