@@ -12,6 +12,14 @@
 # directly; there is no shell in between to prefix an env) — and nothing here
 # depends on the environment variable reaching the session.
 #
+# The ssh client and the signer are the fork's, forkcloser/openssh from the
+# machine toolset (ECDSA and security keys built in; the Homebrew build has no
+# OpenSSL, hence no ECDSA), named by real path: a session's aqua root carries no
+# openssh, so the toolset's shim resolves nothing there, and git execs
+# gpg.ssh.program with no shell in between. The path is the pinned version's:
+# a bump moves it on the next run of this script, and aqua keeps the old
+# version's files until they are pruned, so nothing breaks in between.
+#
 # Usage:
 #   limen-install-agent [--write DIR]... [--socket PATH] [--agent-root DIR]
 #                       [--no-verify] <login> <email> <public-key-file>
@@ -75,6 +83,22 @@ for tool in python3 curl aqua; do
   command -v "$tool" >/dev/null 2>&1 || { err "$tool is required (the ProxyCommand helper and the settings merge are python3; curl fetches GitHub's host keys; aqua populates the sessions' tool root)"; exit 1; }
 done
 readonly AGENT_ROOT WRITE
+
+# The fork, by real path (header). `aqua which` reads a checkout's own aqua.yaml
+# before the global config the machine installer wrote: resolved from /, where
+# there is none.
+export AQUA_GLOBAL_CONFIG="${AQUA_GLOBAL_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/aqua/aqua.yaml}"
+FORK_SSH="$(cd / && aqua which ssh 2>/dev/null || true)"
+case "$FORK_SSH" in
+  */github.com/forkcloser/openssh/*/bin/ssh) ;;
+  *) err "ssh resolves to ${FORK_SSH:-nothing}, not to forkcloser/openssh from the machine toolset — run limen-install first"; exit 1 ;;
+esac
+readonly FORK_SSH FORK_KEYGEN="$FORK_SSH-keygen" FORK_ADD="$FORK_SSH-add"
+[ -x "$FORK_KEYGEN" ] && [ -x "$FORK_ADD" ] || { err "no ssh-keygen and ssh-add beside $FORK_SSH"; exit 1; }
+# The bot has one key, and ssh offers a key only when its algorithm is in the
+# accepted list; the fork's default list carries no ECDSA. A named list, the
+# key's own algorithm and nothing else — never `+`, which re-admits the default set.
+readonly KEY_ALGO="${BOT_KEY%% *}"
 
 # Claude Code's configuration home; CLAUDE_CONFIG_DIR is its own override.
 readonly CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
@@ -182,12 +206,12 @@ PY
   # execs gpg.ssh.program directly — so the socket is pinned in a wrapper.
   cat > "$SIGNER" <<SH
 #!/bin/sh
-# Written by limen-install-agent: Apple's ssh-keygen (the Homebrew one has no
-# OpenSSL, hence no ECDSA) with the agent socket pinned, because the Claude
-# Code sandbox rewrites SSH_AUTH_SOCK to a socket it then denies.
+# Written by limen-install-agent: the fork's ssh-keygen (forkcloser/openssh, the
+# machine toolset's pin, by real path) with the agent socket pinned, because the
+# Claude Code sandbox rewrites SSH_AUTH_SOCK to a socket it then denies.
 SSH_AUTH_SOCK='$AGENT_SOCKET'
 export SSH_AUTH_SOCK
-exec /usr/bin/ssh-keygen "\$@"
+exec '$FORK_KEYGEN' "\$@"
 SH
   chmod 0755 "$SIGNER"
   ok "signing wrapper: $SIGNER"
@@ -232,7 +256,7 @@ install_gitconfig() {
   # git hands core.sshCommand to sh, which strips one level of quotes before ssh
   # parses the option, so a socket path with a space ("Application Support")
   # needs ssh_config's own double quotes inside the shell's single quotes.
-  ssh_command="/usr/bin/ssh -o 'IdentityAgent=\"$AGENT_SOCKET\"' -o IdentitiesOnly=no -o ProxyCommand='python3 $HELPER %h %p' -o UserKnownHostsFile=$KNOWN_HOSTS -o StrictHostKeyChecking=yes -o ControlMaster=no -o ControlPath=none"
+  ssh_command="'$FORK_SSH' -o 'IdentityAgent=\"$AGENT_SOCKET\"' -o IdentitiesOnly=no -o PubkeyAcceptedAlgorithms=$KEY_ALGO -o ProxyCommand='python3 $HELPER %h %p' -o UserKnownHostsFile=$KNOWN_HOSTS -o StrictHostKeyChecking=yes -o ControlMaster=no -o ControlPath=none"
   : > "$GITIGNORE"
   : > "$GITCONFIG"
   local g=(git config --file "$GITCONFIG")
@@ -240,8 +264,7 @@ install_gitconfig() {
   "${g[@]}" user.email "$BOT_EMAIL"
   "${g[@]}" user.signingkey "key::$BOT_KEY"
   "${g[@]}" gpg.format ssh
-  # The wrapper around Apple's ssh-keygen (the Homebrew OpenSSH is built
-  # without OpenSSL and cannot use an ECDSA key) with the agent socket pinned
+  # The wrapper around the fork's ssh-keygen with the agent socket pinned
   # inside it — see the header on SSH_AUTH_SOCK.
   "${g[@]}" gpg.ssh.program "$SIGNER"
   "${g[@]}" commit.gpgsign true
@@ -415,15 +438,16 @@ verify() {
   [ -S "$AGENT_SOCKET" ] || { err "no agent socket at $AGENT_SOCKET — load the agent (taciturn install), or name another with --socket, and re-run"; exit 1; }
   local blob
   blob="$(printf '%s' "$BOT_KEY" | awk '{print $2}')"
-  if ! SSH_AUTH_SOCK="$AGENT_SOCKET" /usr/bin/ssh-add -L 2>/dev/null | grep -qF "$blob"; then
+  if ! SSH_AUTH_SOCK="$AGENT_SOCKET" "$FORK_ADD" -L 2>/dev/null | grep -qF "$blob"; then
     err "the agent at $AGENT_SOCKET does not serve the key in $BOT_KEY_FILE — the agent lists a key only once its policy allows something: taciturn key create <name>; taciturn key allow <name> --user git --host github.com --known-hosts $KNOWN_HOSTS; taciturn key sshsig <name> --namespace git; then re-run"
     exit 1
   fi
   ok "agent serves the bot key"
-  # Outside the sandbox there is no proxy: plain ssh, pinned host keys, this
-  # agent only — GitHub answers with the account the key is registered on.
+  # Outside the sandbox there is no proxy: the fork's ssh as the sessions run
+  # it, pinned host keys, this agent only — GitHub answers with the account the
+  # key is registered on.
   local greeting
-  greeting="$(/usr/bin/ssh -o "IdentityAgent=\"$AGENT_SOCKET\"" -o IdentitiesOnly=no -o UserKnownHostsFile="$KNOWN_HOSTS" -o StrictHostKeyChecking=yes -T git@github.com 2>&1 || true)"
+  greeting="$("$FORK_SSH" -o "IdentityAgent=\"$AGENT_SOCKET\"" -o IdentitiesOnly=no -o "PubkeyAcceptedAlgorithms=$KEY_ALGO" -o UserKnownHostsFile="$KNOWN_HOSTS" -o StrictHostKeyChecking=yes -T git@github.com 2>&1 || true)"
   case "$greeting" in
     "Hi $BOT_LOGIN!"*) ok "GitHub authenticates the key as $BOT_LOGIN" ;;
     Hi\ *) err "GitHub authenticates the key as a different account: ${greeting%%!*}! — register it on $BOT_LOGIN instead"; exit 1 ;;
