@@ -68,7 +68,11 @@ smoke:
                 launchctl print "$domain/$label" > /dev/null
                 launchctl bootout "$domain/$label"
             done
-            echo "limen-install: both services loaded on the runner and booted out"
+            if launchctl print "$domain/org.forkcloser.sshd" > /dev/null 2>&1; then
+                echo "limen-install: the server was off and the run turned it on" >&2
+                exit 1
+            fi
+            echo "limen-install: both services loaded on the runner and booted out; the server left off"
         fi
     fi
     echo "limen-install: end to end in a throwaway HOME, ok"

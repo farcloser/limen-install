@@ -28,13 +28,16 @@ What it does:
 The global aqua config pins the machine toolset: `limen`, and on macOS/arm64
 [forkcloser/openssh](https://github.com/forkcloser/openssh) — OpenSSH with security keys
 built in (`ssh`, `ssh-agent`, `ssh-add`, `ssh-keygen`, `ssh-keyscan`, `scp`, `sftp`,
-`ssh-agent-install`); aqua skips it elsewhere. Renovate moves both pins here, and a tag ships
-them to every machine the next night. The ssh-agent launchd agent (`org.forkcloser.ssh_agent`)
-is part of the toolset: it runs the package by its real path, so whenever the loaded agent is
-not the pinned package — none loaded, an older one, a hand-unpacked one — the script runs the
-package's `ssh-agent-install`, which installs and starts it. `LIMEN_INSTALL_NO_LAUNCHD=1`
-makes a run load no service — neither the agent nor the nightly job; their files are still
-written — for a test in a throwaway HOME on a machine with a real agent.
+`ssh-agent-install`, `sshd-install`, `sshd-uninstall`); aqua skips it elsewhere. Renovate
+moves both pins here, and a tag ships them to every machine the next night. The ssh-agent
+launchd agent (`org.forkcloser.ssh_agent`) is part of the toolset: it runs the package by its
+real path, so whenever the loaded agent is not the pinned package — none loaded, an older
+one, a hand-unpacked one — the script runs the package's `ssh-agent-install`, which installs
+and starts it. The server (`org.forkcloser.sshd`) is yours to turn on and off with
+`sshd-install` and `sshd-uninstall`: the script only moves a loaded server onto the pinned
+package, and never starts or stops one. `LIMEN_INSTALL_NO_LAUNCHD=1` makes a run load no
+service — neither the agent nor the nightly job; their files are still written — for a test
+in a throwaway HOME on a machine with a real agent.
 
 ## The nightly update job (macOS)
 
