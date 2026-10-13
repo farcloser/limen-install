@@ -211,8 +211,8 @@ write_config() {
   cat > "$AQUA_GLOBAL_CONFIG" <<'YAML'
 ---
 # Global aqua config — the machine toolset: limen, the project scaffolder,
-# and OpenSSH with security keys built in. Written by limen-install;
-# edits are overwritten on the next run.
+# OpenSSH with security keys built in, and taciturn, the Secure Enclave
+# ssh-agent. Written by limen-install; edits are overwritten on the next run.
 checksum:
   enabled: true
   require_checksum: true
@@ -224,6 +224,8 @@ packages:
   - name: farcloser/limen@v0.11.0 # renovate: depName=farcloser/limen
     registry: farcloser
   - name: forkcloser/openssh@v10.6.1.2 # renovate: depName=forkcloser/openssh
+    registry: farcloser
+  - name: forkcloser/taciturn@v0.1.0 # renovate: depName=forkcloser/taciturn
     registry: farcloser
 YAML
 
@@ -298,6 +300,25 @@ packages:
       algorithm: sha256
     github_artifact_attestations:
       signer_workflow: forkcloser/openssh/.github/workflows/release.yaml
+    supported_envs:
+      - darwin/arm64
+  # taciturn, the ssh-agent for Secure Enclave keys the sessions sign and push
+  # through, darwin/arm64 only; the binary sits at the archive root. The
+  # release attests the asset and ships checksums.txt.
+  - type: github_release
+    repo_owner: forkcloser
+    repo_name: taciturn
+    description: ssh-agent for Secure Enclave keys, with per-key policy (forkcloser/taciturn)
+    asset: taciturn_{{trimV .Version}}_{{.OS}}_{{.Arch}}.tar.gz
+    format: tar.gz
+    files:
+      - name: taciturn
+    checksum:
+      type: github_release
+      asset: checksums.txt
+      algorithm: sha256
+    github_artifact_attestations:
+      signer_workflow: forkcloser/taciturn/.github/workflows/release.yaml
     supported_envs:
       - darwin/arm64
 YAML
@@ -393,6 +414,43 @@ refresh_sshd() {
     ok "sshd: $SSHD_LABEL runs the pinned package"
   else
     err "sshd: sshd-install failed — from a logged-in terminal, run limen-install again"
+    LAUNCHD_FAILED=1
+  fi
+}
+
+# taciturn's agent, gui/<uid>/org.forkcloser.taciturn, runs the binary by its
+# real path, so an upgrade would leave it on the old package. The first
+# install — the bot's key, its policy, the agent loaded — is the human's
+# (`taciturn install`), with the key store that comes with it; this script only
+# keeps a loaded agent on the pinned package, with the pinned binary's own
+# `taciturn install`, which rewrites the plist and bootstraps it again. Not
+# loaded means not installed here: nothing is run.
+readonly TACITURN_LABEL="org.forkcloser.taciturn"
+refresh_taciturn() {
+  is_macos || return 0
+  local pkg program
+  pkg="$(cd "$CONFIG_DIR" && aqua which taciturn 2>/dev/null)" || return 0
+  pkg="${pkg%/taciturn}"
+  program="$({ launchctl print "gui/$(id -u)/$TACITURN_LABEL" 2>/dev/null || true; } | sed -n 's#^[[:space:]]*program = \(/.*\)$#\1#p' | head -n 1)"
+  if [ -z "$program" ]; then
+    log "taciturn: $TACITURN_LABEL not loaded; the first install is yours: taciturn install"
+    return 0
+  fi
+  case "$program" in
+    "$pkg"/*)
+      ok "taciturn: $TACITURN_LABEL runs the pinned package"
+      return 0
+      ;;
+  esac
+  if [ "${LIMEN_INSTALL_NO_LAUNCHD:-}" = 1 ]; then
+    log "taciturn: LIMEN_INSTALL_NO_LAUNCHD is set; $TACITURN_LABEL left on $program"
+    return 0
+  fi
+  log "taciturn: $TACITURN_LABEL runs $program, the pin is $pkg: moving the agent onto it"
+  if (cd "$CONFIG_DIR" && taciturn install); then
+    ok "taciturn: $TACITURN_LABEL runs the pinned package"
+  else
+    err "taciturn: taciturn install failed — from a logged-in terminal, run limen-install again"
     LAUNCHD_FAILED=1
   fi
 }
@@ -511,6 +569,7 @@ write_config
 install_tools
 refresh_ssh_agent
 refresh_sshd
+refresh_taciturn
 install_nightly
 if [ "$SHELL_CHANGED" = 1 ]; then
   ok "open a new shell to pick up PATH changes"
