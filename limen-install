@@ -118,11 +118,25 @@ install_aqua() {
     return
   fi
   log "installing aqua ${AQUA_VERSION} (installer ${AQUA_INSTALLER_VERSION})"
-  local t; t="$(mktemp -d)"
+  local t; t="$(mktemp -d "${TMPDIR:-/tmp}/limen-install.XXXXXX")"
   curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o "$t/i" \
     "https://raw.githubusercontent.com/aquaproj/aqua-installer/${AQUA_INSTALLER_VERSION}/aqua-installer"
   verify_sha256 "$t/i" "$AQUA_INSTALLER_SHA256"
-  chmod +x "$t/i"; "$t/i" -v "$AQUA_VERSION"; rm -rf "$t"
+  chmod +x "$t/i"
+  # Apple's mktemp ignores TMPDIR and lands in the per-user temp directory,
+  # and the installer calls it bare: under a TMPDIR set on purpose (a sandbox
+  # that denies that directory) it would die there. A shim first on the
+  # child's PATH gives a bare call a template under TMPDIR; a call that
+  # carries its own template is left alone.
+  mkdir -p "$t/bin"
+  cat > "$t/bin/mktemp" <<'SHIM'
+#!/bin/sh
+real="$(PATH=/usr/bin:/bin command -v mktemp)"
+for a in "$@"; do case "$a" in -*) ;; *) exec "$real" "$@" ;; esac; done
+exec "$real" "$@" "${TMPDIR:-/tmp}/aqua-installer.XXXXXX"
+SHIM
+  chmod +x "$t/bin/mktemp"
+  PATH="$t/bin:$PATH" "$t/i" -v "$AQUA_VERSION"; rm -rf "$t"
   ok "aqua ${AQUA_VERSION} installed"
 }
 
@@ -381,7 +395,7 @@ case "\$tag" in
   v*) ;;
   *) echo "limen-install nightly: no release tag behind \$url" >&2; exit 1 ;;
 esac
-t=\$(mktemp -d)
+t=\$(mktemp -d "\${TMPDIR:-/tmp}/limen-install.XXXXXX")
 trap 'rm -rf "\$t"' EXIT
 curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o "\$t/limen-install" \
   "https://raw.githubusercontent.com/farcloser/limen-install/\$tag/limen-install"
@@ -392,7 +406,7 @@ RUNNER
   mv "$runner" "$NIGHTLY_RUNNER"
 
   local plist
-  plist="$(mktemp)"
+  plist="$(mktemp "${TMPDIR:-/tmp}/limen-install.plist.XXXXXX")"
   cat > "$plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
