@@ -59,6 +59,13 @@ smoke:
     (cd "$home" && AQUA_GLOBAL_CONFIG="$home/.config/aqua/aqua.yaml" AQUA_POLICY_CONFIG="$home/.config/aqua/aqua-policy.yaml" \
         HOME="$home" PATH="$home/.local/share/aquaproj-aqua/bin:/usr/bin:/bin:/usr/sbin:/sbin" limen version)
     if [ "$(uname -s)" = Darwin ]; then
+        # The macOS toolset resolved by name: aqua ignores a pin it cannot place
+        # (a registry it does not find, a file the tarball lacks) with an error
+        # line and still ends the install, so the run alone proves nothing.
+        for tool in ssh-agent-install sshd-install taciturn; do
+            (cd "$home" && AQUA_GLOBAL_CONFIG="$home/.config/aqua/aqua.yaml" AQUA_POLICY_CONFIG="$home/.config/aqua/aqua-policy.yaml" \
+                HOME="$home" PATH="$home/.local/share/aquaproj-aqua/bin:/usr/bin:/bin:/usr/sbin:/sbin" aqua which "$tool" > /dev/null)
+        done
         test -x "$home/.local/share/limen-install/nightly"
         plutil -lint "$home/Library/LaunchAgents/world.farcloser.limen-install.plist"
         sh -n "$home/.local/share/limen-install/nightly"
@@ -68,11 +75,13 @@ smoke:
                 launchctl print "$domain/$label" > /dev/null
                 launchctl bootout "$domain/$label"
             done
-            if launchctl print "$domain/org.forkcloser.sshd" > /dev/null 2>&1; then
-                echo "limen-install: the server was off and the run turned it on" >&2
-                exit 1
-            fi
-            echo "limen-install: both services loaded on the runner and booted out; the server left off"
+            for label in org.forkcloser.sshd org.forkcloser.taciturn; do
+                if launchctl print "$domain/$label" > /dev/null 2>&1; then
+                    echo "limen-install: $label was not loaded and the run loaded it" >&2
+                    exit 1
+                fi
+            done
+            echo "limen-install: both services loaded on the runner and booted out; the server and taciturn left alone"
         fi
     fi
     echo "limen-install: end to end in a throwaway HOME, ok"
