@@ -304,6 +304,51 @@ baseline += ["Edit(./.claude/hooks)", "Edit(./.claude/settings.json)", "Edit(./.
 for rule in baseline:
     if rule not in deny:
         deny.append(rule)
+# The sandbox baseline, reviewed 2026-10-12 (limen's book, identity.md). Domains are
+# added, never removed, so a machine's own additions survive; the exclusion list is
+# set exactly, because an exclusion runs unsandboxed and the rule is one fixed,
+# human-owned binary by absolute path or nothing. No mach service: the only one ever
+# needed served VM boots, which cannot run sandboxed (upstream.md). Apple events off:
+# nothing a session runs talks to another app. Weaker network isolation on: it adds
+# the one trustd lookup Go needs to verify TLS. Local binding on: Go tests listen.
+sandbox = settings.setdefault("sandbox", {})
+network = sandbox.setdefault("network", {})
+for key, wanted in (("allowedDomains", [
+         "*.apache.org", "*.apple.com", "apple.com", "aquaproj.github.io",
+         "cloudflare-dns.com", "cloudflare.com", "*.cloudflare.com", "code.claude.com",
+         "*.crates.io", "crates.io", "curl.se", "cygwin.com", "discogs.com",
+         "*.discogs.com", "dl.google.com", "docs.getutm.app", "docs.renovatebot.com",
+         "eclecticlight.co", "farcloser.world", "*.farcloser.world", "forkcloser.org",
+         "*.forkcloser.org", "*.gcr.io", "*.github.com", "github.com",
+         "*.githubusercontent.com", "go.dev", "*.go.dev", "*.golang.org", "golang.org",
+         "golangci-lint.run", "goreleaser.com", "keepachangelog.com",
+         "*.keepachangelog.com", "*.kernel.org", "learn.microsoft.com", "lwn.net",
+         "man7.org", "mozilla.org", "*.mozilla.org", "msys2.org", "*.msys2.org",
+         "*.opentofu.org", "*.readthedocs.io", "readthedocs.io", "rust-lang.org",
+         "*.rust-lang.org", "rustup.rs", "*.rustup.rs", "*.semver.org", "semver.org",
+         "*.shellcheck.net", "sigstore.dev", "*.sigstore.dev",
+         "specifications.freedesktop.org", "tmaproduction.blob.core.windows.net",
+         "unicode.org", "*.unicode.org", "unlicense.org", "website-godolint.pages.dev",
+         "*.wikipedia.org",
+]), ("deniedDomains", [
+         "uploads.github.com", "api.cloudflare.com", "dash.cloudflare.com",
+         "appstoreconnect.apple.com", "api.appstoreconnect.apple.com", "desec.io",
+         "*.desec.io", "api.gandi.net",
+])):
+    have = network.setdefault(key, [])
+    for d in wanted:
+        if d not in have:
+            have.append(d)
+network["allowMachLookup"] = []
+network["allowLocalBinding"] = True
+sandbox["allowAppleEvents"] = False
+sandbox["enableWeakerNetworkIsolation"] = True
+sandbox["excludedCommands"] = ["/Applications/UTM.app/Contents/MacOS/utmctl *"]
+# The harness: transcripts kept a week (every session can read every other's), no
+# background traffic from the CLI. Bypass mode cannot be refused from here:
+# disableBypassPermissionsMode is honoured in managed settings only (tried 2026-10-12).
+settings["cleanupPeriodDays"] = 7
+env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
 # The hand-kept hook that auto-allowed sandboxed commands is retired: the
 # sandbox itself auto-allows them, and its exclusion regex drifted from
 # excludedCommands. The file is left for the human.

@@ -137,7 +137,11 @@ What it does (idempotent — re-run to converge):
   stores (never the keychain, which gh needs), Edit denials on every dotfile
   letter that holds no sandbox write location, on the launch agents and app data,
   and on each project's own settings and hooks; Read and Edit rules also become
-  sandbox denials for every command. The hand-kept hook that auto-allowed
+  sandbox denials for every command. The sandbox baseline follows: the reviewed
+  network allowlist and deny list (added to, never pruned), no mach service, Apple
+  events off, the one exclusion (UTM's `utmctl` by absolute path), and the harness
+  settings that go with it (transcripts kept a week, no background traffic; bypass
+  mode cannot be refused from user settings). The hand-kept hook that auto-allowed
   sandboxed commands is dropped from the settings (the sandbox auto-allows them
   itself); its file is left for the human.
 - **Verification**: the agent serves the key, and GitHub authenticates it as
