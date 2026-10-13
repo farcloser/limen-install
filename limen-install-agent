@@ -58,6 +58,10 @@ if [ $# -ne 3 ]; then
   exit 2
 fi
 for d in ${WRITE[@]+"${WRITE[@]}"}; do [ -d "$d" ] || { err "--write $d: not a directory"; exit 2; }; done
+# Before anything is written: the socket is pinned into the signer wrapper, the ssh
+# command and the sandbox's socket list, so a wrong default (an agent not installed
+# yet) would break signing and pushing in every session. Refuse first.
+[ -S "$AGENT_SOCKET" ] || { err "no agent socket at $AGENT_SOCKET — nothing written; load the agent (taciturn install), or name the live one with --socket"; exit 1; }
 readonly BOT_LOGIN="$1" BOT_EMAIL="$2" BOT_KEY_FILE="$3"
 BOT_KEY="$(head -n 1 "$BOT_KEY_FILE")"
 readonly BOT_KEY
@@ -77,6 +81,7 @@ readonly CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 readonly HELPER="$CLAUDE_HOME/bin/ssh-connect-proxy"
 readonly SIGNER="$CLAUDE_HOME/bin/ssh-keygen-agent"
 readonly KNOWN_HOSTS="$CLAUDE_HOME/known_hosts"
+readonly GITCONFIG="$CLAUDE_HOME/gitconfig" GITIGNORE="$CLAUDE_HOME/gitignore"
 readonly SETTINGS="$CLAUDE_HOME/settings.json"
 readonly AGENT_AQUA="$AGENT_ROOT/aqua" AGENT_HOME="$AGENT_ROOT/home"
 
@@ -214,20 +219,55 @@ install_agent_root() {
   ok "sessions' tool root: $AGENT_ROOT (aqua $version)"
 }
 
+# The sessions' git configuration: one file under the Claude Code home, which a
+# session reads and cannot write (same standing as the gh token), named by
+# GIT_CONFIG_GLOBAL in the settings env. git then reads neither the human's
+# ~/.gitconfig nor ~/.config/git, so neither needs to be readable, and the
+# human's symlinked config can live wherever it likes. Rewritten whole on every
+# run, so the file converges with the installer.
+install_gitconfig() {
+  local ssh_command
+  # IdentityAgent pins the enclave agent whatever SSH_AUTH_SOCK says (the
+  # sandbox rewrites it); IdentitiesOnly=no lets the agent's key be offered.
+  # git hands core.sshCommand to sh, which strips one level of quotes before ssh
+  # parses the option, so a socket path with a space ("Application Support")
+  # needs ssh_config's own double quotes inside the shell's single quotes.
+  ssh_command="/usr/bin/ssh -o 'IdentityAgent=\"$AGENT_SOCKET\"' -o IdentitiesOnly=no -o ProxyCommand='python3 $HELPER %h %p' -o UserKnownHostsFile=$KNOWN_HOSTS -o StrictHostKeyChecking=yes -o ControlMaster=no -o ControlPath=none"
+  : > "$GITIGNORE"
+  : > "$GITCONFIG"
+  local g=(git config --file "$GITCONFIG")
+  "${g[@]}" user.name "$BOT_LOGIN"
+  "${g[@]}" user.email "$BOT_EMAIL"
+  "${g[@]}" user.signingkey "key::$BOT_KEY"
+  "${g[@]}" gpg.format ssh
+  # The wrapper around Apple's ssh-keygen (the Homebrew OpenSSH is built
+  # without OpenSSL and cannot use an ECDSA key) with the agent socket pinned
+  # inside it — see the header on SSH_AUTH_SOCK.
+  "${g[@]}" gpg.ssh.program "$SIGNER"
+  "${g[@]}" commit.gpgsign true
+  "${g[@]}" core.sshCommand "$ssh_command"
+  # An empty excludes file: git's default is ~/.config/git/ignore, which the
+  # sandbox denies, and it warns on every command otherwise.
+  "${g[@]}" core.excludesFile "$GITIGNORE"
+  # `git c push|fetch|pull`: the sandbox exports GIT_SSH_COMMAND, which
+  # outranks core.sshCommand; this alias drops it for one command.
+  "${g[@]}" alias.c '!env -u GIT_SSH_COMMAND git'
+  # The harness protects every .git/config under a session's root, and a push
+  # that sets an upstream writes it; the branch needs no upstream for a PR.
+  "${g[@]}" push.autosetupremote false
+  # https reads (a go module of a private repository) authenticate with the
+  # bot's gh token; the leading empty helper drops any system default.
+  "${g[@]}" --replace-all credential.https://github.com.helper ''
+  "${g[@]}" --add credential.https://github.com.helper '!gh auth git-credential'
+  chmod 0644 "$GITCONFIG" "$GITIGNORE"
+  ok "sessions' git configuration: $GITCONFIG"
+}
+
 merge_settings() {
   mkdir -p "$CLAUDE_HOME"
   [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
   cp "$SETTINGS" "$SETTINGS.bak"
-  local ssh_command
-  # IdentityAgent pins the enclave agent whatever SSH_AUTH_SOCK says (the
-  # sandbox rewrites it); IdentitiesOnly=no lets the agent's key be offered.
-  # The socket path carries a space (Application Support), and ssh parses an
-  # option's value itself after the shell has had its say: git hands this
-  # string to sh, which strips one layer of quotes, so the option is single-
-  # quoted for sh with ssh_config's double quotes inside for ssh. Shell
-  # quotes alone leave ssh a bare space and "extra arguments at end of line".
-  ssh_command="/usr/bin/ssh -o 'IdentityAgent=\"$AGENT_SOCKET\"' -o IdentitiesOnly=no -o ProxyCommand='python3 $HELPER %h %p' -o UserKnownHostsFile=$KNOWN_HOSTS -o StrictHostKeyChecking=yes -o ControlMaster=no -o ControlPath=none"
-  SOCKET="$AGENT_SOCKET" LOGIN="$BOT_LOGIN" EMAIL="$BOT_EMAIL" KEY="$BOT_KEY" SSHCMD="$ssh_command" SIGNER_PATH="$SIGNER" \
+  SOCKET="$AGENT_SOCKET" GITCONFIG_PATH="$GITCONFIG" \
   ROOT="$AGENT_ROOT" WRITE_DIRS="$(printf '%s\n' ${WRITE[@]+"${WRITE[@]}"})" USER_HOME="$HOME" \
   python3 - "$SETTINGS" <<'PY'
 import json, os, sys
@@ -235,28 +275,12 @@ path = sys.argv[1]
 with open(path) as f:
     settings = json.load(f)
 env = settings.setdefault("env", {})
-# Drop the stale numbered block, and the socket beside it, before writing them
-# again in one fixed order: the file then converges on the first run, not the
-# second (a key left in place while its neighbours are re-added moves).
+# The git identity used to be a numbered GIT_CONFIG_* block here; it is now the
+# file GIT_CONFIG_GLOBAL names. The numbered keys are the installer's own output
+# and are removed so the file converges. The socket is re-added below in place.
 for key in [k for k in env if k.startswith("GIT_CONFIG_") or k == "SSH_AUTH_SOCK"]:
     del env[key]
-entries = [
-    ("user.name", os.environ["LOGIN"]),
-    ("user.email", os.environ["EMAIL"]),
-    ("user.signingkey", "key::" + os.environ["KEY"]),
-    # The wrapper around Apple's ssh-keygen (the Homebrew OpenSSH is built
-    # without OpenSSL and cannot use an ECDSA key) with the agent socket
-    # pinned inside it — see the header on SSH_AUTH_SOCK.
-    ("gpg.ssh.program", os.environ["SIGNER_PATH"]),
-    ("core.sshCommand", os.environ["SSHCMD"]),
-    # `git c push|fetch|pull`: the sandbox exports GIT_SSH_COMMAND, which
-    # outranks core.sshCommand; this alias drops it for one command.
-    ("alias.c", "!env -u GIT_SSH_COMMAND git"),
-]
-env["GIT_CONFIG_COUNT"] = str(len(entries))
-for index, (key, value) in enumerate(entries):
-    env[f"GIT_CONFIG_KEY_{index}"] = key
-    env[f"GIT_CONFIG_VALUE_{index}"] = value
+env["GIT_CONFIG_GLOBAL"] = os.environ["GITCONFIG_PATH"]
 # Belt and braces only: the sandbox rewrites this variable before the tool
 # shell sees it. Nothing above depends on it reaching the session.
 env["SSH_AUTH_SOCK"] = os.environ["SOCKET"]
@@ -409,6 +433,7 @@ verify() {
 
 install_helper
 pin_github_host_keys
+install_gitconfig
 install_agent_root
 merge_settings
 if [ "$VERIFY" = 1 ]; then verify; fi
