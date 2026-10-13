@@ -118,11 +118,18 @@ What it does (idempotent — re-run to converge):
   trust-on-first-use.
 - **Claude Code settings** (`~/.claude/settings.json`, merged, backed up):
   the agent socket allowed into the sandbox and its key store
-  (`~/Library/Application Support/taciturn/keys`) denied to it, and the bot identity as
-  session-scoped git configuration — name, email, signing key, the signing
-  wrapper as `gpg.ssh.program` (the Homebrew OpenSSH is built without OpenSSL
-  and cannot use an ECDSA key; Apple's can), `core.sshCommand` with the agent
-  pinned, and a `git c` alias. The human's own git config is never touched.
+  (`~/Library/Application Support/taciturn/keys`) denied to it, and one variable,
+  `GIT_CONFIG_GLOBAL`, naming the sessions' git configuration.
+- **The sessions' git configuration** (`~/.claude/gitconfig`, rewritten whole on every
+  run, readable and not writable by a session like the gh token beside it): name,
+  email, signing key, the signing wrapper as `gpg.ssh.program` (the Homebrew
+  OpenSSH is built without OpenSSL and cannot use an ECDSA key; Apple's can),
+  `core.sshCommand` with the agent pinned, the `git c` alias, an empty excludes file
+  (git's default under `~/.config` is denied to sessions), `push.autosetupremote`
+  off (the harness protects every `.git/config` under a session's root), and the
+  gh credential helper for https reads. With `GIT_CONFIG_GLOBAL` set, a session's
+  git never reads the human's `~/.gitconfig` or `~/.config/git`, so neither needs to
+  be readable and the human's config may live wherever it likes.
 - **The sessions' tool root** (`--agent-root`, default `~/.local/share/limen-agent`):
   aqua's root, a home for the verifiers, and the Go, cargo and XDG caches, all a
   session may write, so nothing a sandboxed command writes is ever executed
