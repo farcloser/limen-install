@@ -115,13 +115,14 @@ What it does (idempotent — re-run to converge):
 - **The sessions' tool root** (`--agent-root`, default `~/.local/share/limen-agent`):
   aqua's root, a home for the verifiers, and the Go, cargo and XDG caches, all a
   session may write, so nothing a sandboxed command writes is ever executed
-  outside the sandbox. `--write DIR` is required and repeatable: a directory
-  sessions may write, exactly as given, where the checkouts live; no default, the
-  layout is the machine's. The settings `env` points `AQUA_ROOT_DIR`, `GOPATH`,
+  outside the sandbox. A session may always write its own working directory, so
+  a session started in a checkout is confined to that checkout; `--write DIR`,
+  optional and repeatable, adds a directory exactly as given, for a machine where
+  sessions must reach beyond their own root. The settings `env` points `AQUA_ROOT_DIR`, `GOPATH`,
   `GOMODCACHE`, `GOCACHE`, `CARGO_HOME`, `XDG_CACHE_HOME` and `LIMEN_AGENT_HOME`
   (the home: slsa-verifier keeps its TUF cache under `$HOME/.sigstore` and reads
-  no other variable) into the root; the sandbox's write list becomes the `--write`
-  directories plus the root, and the human's aqua root, Go caches, cargo and
+  no other variable) into the root; the sandbox's write list becomes the root
+  plus any `--write` directories, and the human's aqua root, Go caches, cargo and
   sigstore cache leave it. The root gets aqua at the machine's version and nothing
   per repository: a session approves a checkout's policy and installs its pins
   itself, into the root. A session's `PATH` is left alone: the harness writes its

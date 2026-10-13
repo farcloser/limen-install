@@ -13,12 +13,13 @@
 # depends on the environment variable reaching the session.
 #
 # Usage:
-#   limen-install-agent --write DIR [--write DIR]... [--socket PATH] [--agent-root DIR]
+#   limen-install-agent [--write DIR]... [--socket PATH] [--agent-root DIR]
 #                       [--no-verify] <login> <email> <public-key-file>
 #
 # The sessions' tool root (--agent-root, default ~/.local/share/limen-agent): aqua's
 # root, a home for the verifiers, the Go, cargo and XDG caches. A session may write
-# it and every --write directory, exactly as given, and nothing else of the human's;
+# it, its own project directory (the sandbox always allows the working directory),
+# and any --write directory given, exactly as given; nothing else of the human's.
 # the human's own tool roots leave the sandbox's write list. The root gets aqua and
 # nothing per repository: sessions approve policies and install pins themselves.
 # Design: limen's book/identity.md, "The bot's sandbox".
@@ -50,11 +51,10 @@ while [ $# -gt 0 ]; do
   esac
 done
 if [ $# -ne 3 ]; then
-  err "usage: limen-install-agent --write DIR [--write DIR]... [--socket PATH] [--agent-root DIR] [--no-verify] <login> <email> <public-key-file>"
+  err "usage: limen-install-agent [--write DIR]... [--socket PATH] [--agent-root DIR] [--no-verify] <login> <email> <public-key-file>"
   exit 2
 fi
-[ ${#WRITE[@]} -gt 0 ] || { err "--write DIR is required: a directory sessions may write, the checkouts live under it (repeat for several)"; exit 2; }
-for d in "${WRITE[@]}"; do [ -d "$d" ] || { err "--write $d: not a directory"; exit 2; }; done
+for d in ${WRITE[@]+"${WRITE[@]}"}; do [ -d "$d" ] || { err "--write $d: not a directory"; exit 2; }; done
 readonly BOT_LOGIN="$1" BOT_EMAIL="$2" BOT_KEY_FILE="$3"
 BOT_KEY="$(head -n 1 "$BOT_KEY_FILE")"
 readonly BOT_KEY
@@ -220,7 +220,7 @@ merge_settings() {
   # sandbox rewrites it); IdentitiesOnly=no lets the agent's key be offered.
   ssh_command="/usr/bin/ssh -o IdentityAgent=$SECRETIVE_SOCKET -o IdentitiesOnly=no -o ProxyCommand='python3 $HELPER %h %p' -o UserKnownHostsFile=$KNOWN_HOSTS -o StrictHostKeyChecking=yes -o ControlMaster=no -o ControlPath=none"
   SOCKET="$SECRETIVE_SOCKET" LOGIN="$BOT_LOGIN" EMAIL="$BOT_EMAIL" KEY="$BOT_KEY" SSHCMD="$ssh_command" SIGNER_PATH="$SIGNER" \
-  ROOT="$AGENT_ROOT" WRITE_DIRS="$(printf '%s\n' "${WRITE[@]}")" CONFIG_HOME="$CLAUDE_HOME" USER_HOME="$HOME" \
+  ROOT="$AGENT_ROOT" WRITE_DIRS="$(printf '%s\n' ${WRITE[@]+"${WRITE[@]}"})" CONFIG_HOME="$CLAUDE_HOME" USER_HOME="$HOME" \
   python3 - "$SETTINGS" <<'PY'
 import json, os, sys
 path = sys.argv[1]
@@ -266,7 +266,9 @@ env.update({
     "CARGO_HOME": root + "/cargo",
     "XDG_CACHE_HOME": root + "/cache",
 })
-# The write list: the --write directories as given, and the root. The human's
+# The write list: the root, and any --write directories as given; the sandbox
+# always allows a session's own working directory, so none is needed for the
+# checkouts themselves. The human's
 # own tool roots and TMPDIR leave it; anything this script does not know stays.
 home = os.environ["USER_HOME"]
 def tilde(p):
