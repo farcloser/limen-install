@@ -207,7 +207,7 @@ pin_github_host_keys() {
 # the same aqua version the machine runs. Nothing per repository: a session
 # approves a checkout's policy and installs its pins itself, into this root.
 install_agent_root() {
-  mkdir -p "$AGENT_AQUA" "$AGENT_HOME" "$AGENT_ROOT/go" "$AGENT_ROOT/go-build" "$AGENT_ROOT/cargo" "$AGENT_ROOT/cache"
+  mkdir -p "$AGENT_AQUA" "$AGENT_HOME" "$AGENT_ROOT/go" "$AGENT_ROOT/go-build" "$AGENT_ROOT/cargo" "$AGENT_ROOT/cache" "$AGENT_ROOT/sigstore" "$AGENT_ROOT/share"
   local version
   version="v$(aqua -v | awk '{print $3}')"
   HOME="$AGENT_HOME" AQUA_ROOT_DIR="$AGENT_AQUA" aqua update-aqua "$version" >/dev/null
@@ -269,7 +269,7 @@ if os.environ["SOCKET"] not in (os.path.expanduser(s) for s in sockets):
     sockets.append(os.environ["SOCKET"])
 # The sessions' tool root: every tool a session runs or caches resolves there.
 root = os.environ["ROOT"]
-for key in ("AQUA_ROOT_DIR", "LIMEN_AGENT_HOME", "GOPATH", "GOMODCACHE", "GOCACHE", "CARGO_HOME", "XDG_CACHE_HOME"):
+for key in ("AQUA_ROOT_DIR", "LIMEN_AGENT_HOME", "GOPATH", "GOMODCACHE", "GOCACHE", "CARGO_HOME", "XDG_CACHE_HOME", "TUF_ROOT", "XDG_DATA_HOME"):
     env.pop(key, None)  # re-added below in a fixed order, so a re-run rewrites nothing
 env.update({
     "AQUA_ROOT_DIR": root + "/aqua",
@@ -279,6 +279,12 @@ env.update({
     "GOCACHE": root + "/go-build",
     "CARGO_HOME": root + "/cargo",
     "XDG_CACHE_HOME": root + "/cache",
+    # cosign reads TUF_ROOT for its trusted-root cache (slsa-verifier reads HOME
+    # only, which the env prefix on the aqua recipes covers).
+    "TUF_ROOT": root + "/sigstore",
+    # gh keeps its extensions under XDG_DATA_HOME/gh; the sessions install the
+    # gh-stack extension there, into their own root, and verify its attestation.
+    "XDG_DATA_HOME": root + "/share",
 })
 # The write list: the root, and any --write directories as given; the sandbox
 # always allows a session's own working directory, so none is needed for the
@@ -345,7 +351,9 @@ for key, wanted in (("allowedDomains", [
          "*.opentofu.org", "*.readthedocs.io", "readthedocs.io", "rust-lang.org",
          "*.rust-lang.org", "rustup.rs", "*.rustup.rs", "*.semver.org", "semver.org",
          "*.shellcheck.net", "sigstore.dev", "*.sigstore.dev",
-         "specifications.freedesktop.org", "tmaproduction.blob.core.windows.net",
+         "specifications.freedesktop.org",
+         # proxy.golang.org redirects module downloads here
+         "storage.googleapis.com", "tmaproduction.blob.core.windows.net",
          "unicode.org", "*.unicode.org", "unlicense.org", "website-godolint.pages.dev",
          "*.wikipedia.org",
 ]), ("deniedDomains", [
