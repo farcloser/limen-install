@@ -78,11 +78,14 @@ Before running it, three manual steps:
    GitHub's terms), with two-factor auth. Invite it as an **outside
    collaborator** with write access on the repositories it may push to —
    never as an org member, so it inherits no org-wide defaults.
-2. **[Secretive](https://github.com/maxgoedjen/secretive)** installed, its agent
-   (SecretAgent) enabled, and a key created for the bot with **"Requires
-   authentication" off** — the repository rulesets (pull requests, signed
-   commits) are the veto, not a touch the human ends up performing blindly.
-   Export its public key to a file.
+2. **[taciturn](https://github.com/forkcloser/taciturn)** installed and its agent
+   loaded (`taciturn install`), and a key created for the bot that signs
+   without a prompt, allowed for `git@github.com` and for the `git` sshsig
+   namespace (`taciturn key create`, `key allow`, `key sshsig`) — the
+   repository rulesets (pull requests, signed commits) are the veto, not a
+   touch the human ends up performing blindly. Its public key,
+   `taciturn key list --format ssh`, goes to a file. A machine still on
+   Secretive names that agent's socket with `--socket`.
 3. That public key registered on the bot's GitHub account **twice**: as an
    authentication key and as a signing key.
 
@@ -98,7 +101,7 @@ What it does (idempotent — re-run to converge):
   HTTP CONNECT tunnel through the sandbox's egress proxy. The sandbox's own ssh
   wiring uses an unauthenticated `nc`, which its proxy refuses.
 - **Signing wrapper**: `~/.claude/bin/ssh-keygen-agent`, Apple's `ssh-keygen`
-  with the Secretive socket pinned inside it. The sandbox rewrites
+  with the agent socket pinned inside it. The sandbox rewrites
   `SSH_AUTH_SOCK` to a launchd socket it then denies — even when
   `settings.json` sets it — so the socket has to travel inside what git
   execs: this wrapper for signing, `-o IdentityAgent` in `core.sshCommand`
@@ -107,7 +110,8 @@ What it does (idempotent — re-run to converge):
   published list — the sandbox is denied `~/.ssh`, and there is no
   trust-on-first-use.
 - **Claude Code settings** (`~/.claude/settings.json`, merged, backed up):
-  the Secretive socket allowed into the sandbox, and the bot identity as
+  the agent socket allowed into the sandbox and its key store
+  (`~/Library/Application Support/taciturn/keys`) denied to it, and the bot identity as
   session-scoped git configuration — name, email, signing key, the signing
   wrapper as `gpg.ssh.program` (the Homebrew OpenSSH is built without OpenSSL
   and cannot use an ECDSA key; Apple's can), `core.sshCommand` with the agent
