@@ -58,6 +58,10 @@ if [ $# -ne 3 ]; then
   exit 2
 fi
 for d in ${WRITE[@]+"${WRITE[@]}"}; do [ -d "$d" ] || { err "--write $d: not a directory"; exit 2; }; done
+# Before anything is written: the socket is pinned into the signer wrapper, the ssh
+# command and the sandbox's socket list, so a wrong default (an agent not installed
+# yet) would break signing and pushing in every session. Refuse first.
+[ -S "$AGENT_SOCKET" ] || { err "no agent socket at $AGENT_SOCKET — nothing written; load the agent (taciturn install), or name the live one with --socket"; exit 1; }
 readonly BOT_LOGIN="$1" BOT_EMAIL="$2" BOT_KEY_FILE="$3"
 BOT_KEY="$(head -n 1 "$BOT_KEY_FILE")"
 readonly BOT_KEY
