@@ -107,8 +107,10 @@ What it does (idempotent — re-run to converge):
 - **ProxyCommand helper**: `~/.claude/bin/ssh-connect-proxy`, an authenticated
   HTTP CONNECT tunnel through the sandbox's egress proxy. The sandbox's own ssh
   wiring uses an unauthenticated `nc`, which its proxy refuses.
-- **Signing wrapper**: `~/.claude/bin/ssh-keygen-agent`, Apple's `ssh-keygen`
-  with the agent socket pinned inside it. The sandbox rewrites
+- **Signing wrapper**: `~/.claude/bin/ssh-keygen-agent`, the toolset's `ssh-keygen`
+  (forkcloser/openssh, by its real path: a session's aqua root carries no openssh,
+  so the toolset's shim resolves nothing there) with the agent socket pinned inside
+  it. The sandbox rewrites
   `SSH_AUTH_SOCK` to a launchd socket it then denies — even when
   `settings.json` sets it — so the socket has to travel inside what git
   execs: this wrapper for signing, `-o IdentityAgent` in `core.sshCommand`
@@ -122,14 +124,18 @@ What it does (idempotent — re-run to converge):
   `GIT_CONFIG_GLOBAL`, naming the sessions' git configuration.
 - **The sessions' git configuration** (`~/.claude/gitconfig`, rewritten whole on every
   run, readable and not writable by a session like the gh token beside it): name,
-  email, signing key, the signing wrapper as `gpg.ssh.program` (the Homebrew
-  OpenSSH is built without OpenSSL and cannot use an ECDSA key; Apple's can),
-  `core.sshCommand` with the agent pinned, the `git c` alias, an empty excludes file
+  email, signing key, the signing wrapper as `gpg.ssh.program`, `core.sshCommand`
+  running the toolset's `ssh` by real path with the agent pinned and the bot key's
+  algorithm as the one accepted (the fork's default list carries no ECDSA), the
+  `git c` alias, an empty excludes file
   (git's default under `~/.config` is denied to sessions), `push.autosetupremote`
   off (the harness protects every `.git/config` under a session's root), and the
   gh credential helper for https reads. With `GIT_CONFIG_GLOBAL` set, a session's
   git never reads the human's `~/.gitconfig` or `~/.config/git`, so neither needs to
-  be readable and the human's config may live wherever it likes.
+  be readable and the human's config may live wherever it likes. The toolset comes
+  first, `limen-install` has run; and this script runs again after an openssh bump
+  moves the path (aqua keeps the old version until it is pruned, so nothing breaks
+  in between).
 - **The sessions' tool root** (`--agent-root`, default `~/.local/share/limen-agent`):
   aqua's root, a home for the verifiers, and the Go, cargo and XDG caches, all a
   session may write, so nothing a sandboxed command writes is ever executed
