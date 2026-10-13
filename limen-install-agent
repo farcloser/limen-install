@@ -221,7 +221,12 @@ merge_settings() {
   local ssh_command
   # IdentityAgent pins the enclave agent whatever SSH_AUTH_SOCK says (the
   # sandbox rewrites it); IdentitiesOnly=no lets the agent's key be offered.
-  ssh_command="/usr/bin/ssh -o IdentityAgent='$AGENT_SOCKET' -o IdentitiesOnly=no -o ProxyCommand='python3 $HELPER %h %p' -o UserKnownHostsFile=$KNOWN_HOSTS -o StrictHostKeyChecking=yes -o ControlMaster=no -o ControlPath=none"
+  # The socket path carries a space (Application Support), and ssh parses an
+  # option's value itself after the shell has had its say: git hands this
+  # string to sh, which strips one layer of quotes, so the option is single-
+  # quoted for sh with ssh_config's double quotes inside for ssh. Shell
+  # quotes alone leave ssh a bare space and "extra arguments at end of line".
+  ssh_command="/usr/bin/ssh -o 'IdentityAgent=\"$AGENT_SOCKET\"' -o IdentitiesOnly=no -o ProxyCommand='python3 $HELPER %h %p' -o UserKnownHostsFile=$KNOWN_HOSTS -o StrictHostKeyChecking=yes -o ControlMaster=no -o ControlPath=none"
   SOCKET="$AGENT_SOCKET" LOGIN="$BOT_LOGIN" EMAIL="$BOT_EMAIL" KEY="$BOT_KEY" SSHCMD="$ssh_command" SIGNER_PATH="$SIGNER" \
   ROOT="$AGENT_ROOT" WRITE_DIRS="$(printf '%s\n' ${WRITE[@]+"${WRITE[@]}"})" USER_HOME="$HOME" \
   python3 - "$SETTINGS" <<'PY'
@@ -394,7 +399,7 @@ verify() {
   # Outside the sandbox there is no proxy: plain ssh, pinned host keys, this
   # agent only — GitHub answers with the account the key is registered on.
   local greeting
-  greeting="$(/usr/bin/ssh -o IdentityAgent="$AGENT_SOCKET" -o IdentitiesOnly=no -o UserKnownHostsFile="$KNOWN_HOSTS" -o StrictHostKeyChecking=yes -T git@github.com 2>&1 || true)"
+  greeting="$(/usr/bin/ssh -o "IdentityAgent=\"$AGENT_SOCKET\"" -o IdentitiesOnly=no -o UserKnownHostsFile="$KNOWN_HOSTS" -o StrictHostKeyChecking=yes -T git@github.com 2>&1 || true)"
   case "$greeting" in
     "Hi $BOT_LOGIN!"*) ok "GitHub authenticates the key as $BOT_LOGIN" ;;
     Hi\ *) err "GitHub authenticates the key as a different account: ${greeting%%!*}! — register it on $BOT_LOGIN instead"; exit 1 ;;
