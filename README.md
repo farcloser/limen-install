@@ -129,10 +129,14 @@ What it does (idempotent — re-run to converge):
   own process `PATH` into the shell snapshot as a literal, so no rc file can put
   the root first; the human's aqua `bin` stays first, read-only to sessions, and
   its proxies run the root's packages through `AQUA_ROOT_DIR`. A tool linked only
-  in the root is reached through `just` or `aqua exec`. Two `permissions.deny`
-  rules keep file tools out of `~/.claude`, and the hand-kept hook that
-  auto-allowed sandboxed commands is dropped from the settings (the sandbox
-  auto-allows them itself); its file is left for the human.
+  in the root is reached through `just` or `aqua exec`. The `permissions.deny`
+  baseline is written in full, in `~` form: Read denials on the home's credential
+  stores (never the keychain, which gh needs), Edit denials on every dotfile
+  letter that holds no sandbox write location, on the launch agents and app data,
+  and on each project's own settings and hooks; Read and Edit rules also become
+  sandbox denials for every command. The hand-kept hook that auto-allowed
+  sandboxed commands is dropped from the settings (the sandbox auto-allows them
+  itself); its file is left for the human.
 - **Verification**: the agent serves the key, and GitHub authenticates it as
   the bot.
 
