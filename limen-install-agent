@@ -230,8 +230,10 @@ path = sys.argv[1]
 with open(path) as f:
     settings = json.load(f)
 env = settings.setdefault("env", {})
-# Drop a stale numbered block before writing the new one.
-for key in [k for k in env if k.startswith("GIT_CONFIG_")]:
+# Drop the stale numbered block, and the socket beside it, before writing them
+# again in one fixed order: the file then converges on the first run, not the
+# second (a key left in place while its neighbours are re-added moves).
+for key in [k for k in env if k.startswith("GIT_CONFIG_") or k == "SSH_AUTH_SOCK"]:
     del env[key]
 entries = [
     ("user.name", os.environ["LOGIN"]),
