@@ -220,7 +220,7 @@ merge_settings() {
   # sandbox rewrites it); IdentitiesOnly=no lets the agent's key be offered.
   ssh_command="/usr/bin/ssh -o IdentityAgent=$SECRETIVE_SOCKET -o IdentitiesOnly=no -o ProxyCommand='python3 $HELPER %h %p' -o UserKnownHostsFile=$KNOWN_HOSTS -o StrictHostKeyChecking=yes -o ControlMaster=no -o ControlPath=none"
   SOCKET="$SECRETIVE_SOCKET" LOGIN="$BOT_LOGIN" EMAIL="$BOT_EMAIL" KEY="$BOT_KEY" SSHCMD="$ssh_command" SIGNER_PATH="$SIGNER" \
-  ROOT="$AGENT_ROOT" WRITE_DIRS="$(printf '%s\n' ${WRITE[@]+"${WRITE[@]}"})" CONFIG_HOME="$CLAUDE_HOME" USER_HOME="$HOME" \
+  ROOT="$AGENT_ROOT" WRITE_DIRS="$(printf '%s\n' ${WRITE[@]+"${WRITE[@]}"})" USER_HOME="$HOME" \
   python3 - "$SETTINGS" <<'PY'
 import json, os, sys
 path = sys.argv[1]
@@ -279,10 +279,29 @@ known = {"~/go", "~/Applications/go", "~/Library/Caches/go-build",
 fs = settings.setdefault("sandbox", {}).setdefault("filesystem", {})
 kept = [p for p in fs.get("allowWrite", []) if p not in known and not p.startswith("/var/folders/")]
 fs["allowWrite"] = writes + [tilde(root)] + [p for p in kept if p not in writes and p != tilde(root)]
-# No session edits its own permission machinery with a file tool.
+# The deny rules bind the file tools, and Read and Edit rules are also compiled
+# into the sandbox as read and write denials for every command. Three facts set
+# the list: a deny beats every allow, so no blanket deny on the home is possible;
+# a bare pattern covers everything under it, so no /** is needed; an Edit rule
+# covers Write. Reads: the credential stores of the home, by letter where the
+# letter covers nothing a session must read (not .c*: ~/.claude holds the bot's
+# gh token; not .l*: the agent root; not .n*: nix; not .g*: .gitconfig). Never
+# the keychain: a client has to open it, and gh keeps its token there. Edits:
+# every dotfile letter that holds no sandbox write location (.l* and .n* do),
+# the launch agents and app data, and each project's own settings and hooks.
+# Paths in ~ form, which the rule engine and the sandbox both expand.
 deny = settings.setdefault("permissions", {}).setdefault("deny", [])
-config_home = os.environ["CONFIG_HOME"].lstrip("/")  # rule syntax: //absolute/path
-for rule in ("Edit(//" + config_home + "/**)", "Write(//" + config_home + "/**)"):
+reads = (".Trash", ".a*", ".b*", ".claude.json*", ".codex", ".config", ".d*", ".gemini",
+         ".gnupg", ".lima", ".netrc", ".o*", ".p*", ".s*", ".z*",
+         "Library/Accounts", "Library/Application Support/1Password",
+         "Library/Application Support/Google", "Library/Cookies", "Library/Group Containers",
+         "Library/Mail", "Library/Messages", "Library/Safari")
+edits = (".a*", ".b*", ".c*", ".d*", ".g*", ".o*", ".p*", ".rc", ".s*", ".z*",
+         "Library/Application Support", "Library/LaunchAgents", "Library/Preferences")
+baseline = ["Read(~/" + p + ")" for p in reads] + ["Read(**/.env)", "Read(**/.env.*)"]
+baseline += ["Edit(~/" + p + ")" for p in edits]
+baseline += ["Edit(./.claude/hooks)", "Edit(./.claude/settings.json)", "Edit(./.claude/settings.local.json)"]
+for rule in baseline:
     if rule not in deny:
         deny.append(rule)
 # The hand-kept hook that auto-allowed sandboxed commands is retired: the
