@@ -303,8 +303,12 @@ packages:
     supported_envs:
       - darwin/arm64
   # taciturn, the ssh-agent for Secure Enclave keys the sessions sign and push
-  # through, darwin/arm64 only; the binary sits at the archive root. The
-  # release attests the asset and ships checksums.txt.
+  # through, darwin/arm64 only. From v0.2.0 the archive carries Taciturn.app
+  # and nothing else: the kernel refuses the binary's keychain entitlements
+  # outside its signed bundle, so the binary lives inside it, and the agent
+  # itself resolves that path when it installs its LaunchAgent. The v0.1
+  # archives had the binary at the root. The release attests the asset and
+  # ships checksums.txt.
   - type: github_release
     repo_owner: forkcloser
     repo_name: taciturn
@@ -313,6 +317,14 @@ packages:
     format: tar.gz
     files:
       - name: taciturn
+        src: Taciturn.app/Contents/MacOS/taciturn
+    # aqua consults version_overrides only when the entry itself carries a
+    # version_constraint; without this line every version takes the files above.
+    version_constraint: semver(">= 0.2.0")
+    version_overrides:
+      - version_constraint: semver("< 0.2.0")
+        files:
+          - name: taciturn
     checksum:
       type: github_release
       asset: checksums.txt
