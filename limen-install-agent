@@ -13,8 +13,8 @@
 # depends on the environment variable reaching the session.
 #
 # The ssh client and the signer are the fork's, forkcloser/openssh from the
-# machine toolset (ECDSA and security keys built in; the Homebrew build has no
-# OpenSSL, hence no ECDSA), named by real path: a session's aqua root carries no
+# machine toolset (security keys and ECDSA built in, the latter since it links
+# LibreSSL), named by real path: a session's aqua root carries no
 # openssh, so the toolset's shim resolves nothing there, and git execs
 # gpg.ssh.program with no shell in between. The path is the pinned version's:
 # a bump moves it on the next run of this script, and aqua keeps the old
