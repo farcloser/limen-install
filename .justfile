@@ -2,9 +2,9 @@
 # mounts every shared limen task under `just do ...`.
 import '.limen/just/main.just'
 
-lint: do::lint::default
-fix: do::fix::default
-test: installer-checksum smoke
+lint: do::lint::default do::lint::go::default do::lint::go::deadcode
+fix: do::fix::default do::fix::go::default
+test: do::test::go::default installer-checksum smoke
 
 # --- added by limen fix: the recipe the security workflow runs ---
 security: do::security::default
