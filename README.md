@@ -25,6 +25,11 @@ What it does:
 
 ## The toolset
 
+The toolset's resolver is moving to `limen-hermetic`, the toolset's own aqua with its
+own root, so a shell's aqua is no longer shared with it: the design is
+[docs/design.md](docs/design.md); the sections below describe the installer as it is
+today.
+
 The global aqua config pins the machine toolset: `limen`, and on macOS/arm64
 [forkcloser/openssh](https://github.com/forkcloser/openssh) — OpenSSH with security keys
 built in (`ssh`, `ssh-agent`, `ssh-add`, `ssh-keygen`, `ssh-keyscan`, `scp`, `sftp`,
