@@ -225,7 +225,7 @@ packages:
     registry: farcloser
   - name: forkcloser/openssh@v10.6.1.2 # renovate: depName=forkcloser/openssh
     registry: farcloser
-  - name: forkcloser/taciturn@v0.1.2 # renovate: depName=forkcloser/taciturn
+  - name: forkcloser/taciturn@v0.2.0 # renovate: depName=forkcloser/taciturn
     registry: farcloser
 YAML
 
