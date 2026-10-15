@@ -99,6 +99,13 @@ readonly FORK_SSH FORK_KEYGEN="$FORK_SSH-keygen" FORK_ADD="$FORK_SSH-add"
 # accepted list; the fork's default list carries no ECDSA. A named list, the
 # key's own algorithm and nothing else — never `+`, which re-admits the default set.
 readonly KEY_ALGO="${BOT_KEY%% *}"
+# The fork must know the key's algorithm: a build without it (the toolset's
+# v10.6.1, which the nightly pinned back) lists no such key from the agent and
+# verify would blame the agent for what the client dropped.
+if ! "$FORK_SSH" -Q key 2>/dev/null | grep -qxF "$KEY_ALGO"; then
+  err "$FORK_SSH does not support $KEY_ALGO keys (ssh -Q key) — run limen-install to converge the toolset on a build that does, then re-run"
+  exit 1
+fi
 
 # Claude Code's configuration home; CLAUDE_CONFIG_DIR is its own override.
 readonly CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
@@ -458,12 +465,16 @@ verify() {
   # Outside the sandbox there is no proxy: the fork's ssh as the sessions run
   # it, pinned host keys, this agent only — GitHub answers with the account the
   # key is registered on.
-  local greeting
-  greeting="$("$FORK_SSH" -o "IdentityAgent=\"$AGENT_SOCKET\"" -o IdentitiesOnly=no -o "PubkeyAcceptedAlgorithms=$KEY_ALGO" -o UserKnownHostsFile="$KNOWN_HOSTS" -o StrictHostKeyChecking=yes -T git@github.com 2>&1 || true)"
+  local output greeting
+  output="$("$FORK_SSH" -o "IdentityAgent=\"$AGENT_SOCKET\"" -o IdentitiesOnly=no -o "PubkeyAcceptedAlgorithms=$KEY_ALGO" -o UserKnownHostsFile="$KNOWN_HOSTS" -o StrictHostKeyChecking=yes -T git@github.com 2>&1 || true)"
+  # GitHub's greeting is one line of that output, on the same stream as ssh's
+  # own warnings, which come first (the IP address of the pinned host being
+  # recorded, on a first connection): the line is read, not the output.
+  greeting="$(printf '%s\n' "$output" | grep -m1 '^Hi ' || true)"
   case "$greeting" in
     "Hi $BOT_LOGIN!"*) ok "GitHub authenticates the key as $BOT_LOGIN" ;;
     Hi\ *) err "GitHub authenticates the key as a different account: ${greeting%%!*}! — register it on $BOT_LOGIN instead"; exit 1 ;;
-    *) err "GitHub did not authenticate the key: $greeting"; err "register the public key on $BOT_LOGIN as an authentication key (and as a signing key)"; exit 1 ;;
+    *) err "GitHub did not authenticate the key: $output"; err "register the public key on $BOT_LOGIN as an authentication key (and as a signing key)"; exit 1 ;;
   esac
 }
 
