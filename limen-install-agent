@@ -99,6 +99,13 @@ readonly FORK_SSH FORK_KEYGEN="$FORK_SSH-keygen" FORK_ADD="$FORK_SSH-add"
 # accepted list; the fork's default list carries no ECDSA. A named list, the
 # key's own algorithm and nothing else — never `+`, which re-admits the default set.
 readonly KEY_ALGO="${BOT_KEY%% *}"
+# The fork must know the key's algorithm: a build without it (the toolset's
+# v10.6.1, which the nightly pinned back) lists no such key from the agent and
+# verify would blame the agent for what the client dropped.
+if ! "$FORK_SSH" -Q key 2>/dev/null | grep -qxF "$KEY_ALGO"; then
+  err "$FORK_SSH does not support $KEY_ALGO keys (ssh -Q key) — run limen-install to converge the toolset on a build that does, then re-run"
+  exit 1
+fi
 
 # Claude Code's configuration home; CLAUDE_CONFIG_DIR is its own override.
 readonly CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
