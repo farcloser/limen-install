@@ -369,11 +369,11 @@ fs["allowWrite"] = writes + [tilde(root)] + [p for p in kept if p not in writes 
 # Then every letter of the home, both cases: a read deny on each letter except
 # A (Applications: the Go toolchain), L (Library: its stores are denied one by
 # one above, the rest is cache a session reads), P (Projects: the session roots;
-# Pictures and Public are denied by their first two letters) and V (Vault: the
-# target of the ~/.gitconfig symlink), and an edit deny on each letter except L
-# and P. A rule on a letter is future-proof: a directory created tomorrow is
-# denied the day it appears. Paths in ~ form, which the rule engine and the
-# sandbox both expand.
+# Pictures and Public are denied by their first two letters), and an edit deny
+# on each letter except L and P. V (Vault) is denied since GIT_CONFIG_GLOBAL
+# keeps git away from the human's ~/.gitconfig, a symlink into it. A rule on a
+# letter is future-proof: a directory created tomorrow is denied the day it
+# appears. Paths in ~ form, which the rule engine and the sandbox both expand.
 deny = settings.setdefault("permissions", {}).setdefault("deny", [])
 reads = (".Trash", ".a*", ".b*", ".claude.json*", ".codex", ".config", ".d*", ".gemini",
          ".gnupg", ".lima", ".netrc", ".o*", ".p*", ".s*", ".z*",
@@ -385,7 +385,7 @@ edits = (".a*", ".b*", ".c*", ".d*", ".g*", ".local/bin", ".local/share/claude",
          ".p*", ".rc", ".s*", ".z*",
          "Library/Application Support", "Library/LaunchAgents", "Library/Preferences")
 letters = [c + "*" for c in string.ascii_letters]
-read_skip, edit_skip = "alpvALPV", "lpLP"
+read_skip, edit_skip = "alpALP", "lpLP"
 baseline = ["Read(~/" + p + ")" for p in reads] + ["Read(**/.env)", "Read(**/.env.*)"]
 baseline += ["Read(~/" + l + ")" for l in letters if l[0] not in read_skip] + ["Read(~/Pi*)", "Read(~/Pu*)"]
 baseline += ["Edit(~/" + p + ")" for p in edits]
