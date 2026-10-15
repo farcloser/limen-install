@@ -453,12 +453,16 @@ verify() {
   # Outside the sandbox there is no proxy: the fork's ssh as the sessions run
   # it, pinned host keys, this agent only — GitHub answers with the account the
   # key is registered on.
-  local greeting
-  greeting="$("$FORK_SSH" -o "IdentityAgent=\"$AGENT_SOCKET\"" -o IdentitiesOnly=no -o "PubkeyAcceptedAlgorithms=$KEY_ALGO" -o UserKnownHostsFile="$KNOWN_HOSTS" -o StrictHostKeyChecking=yes -T git@github.com 2>&1 || true)"
+  local output greeting
+  output="$("$FORK_SSH" -o "IdentityAgent=\"$AGENT_SOCKET\"" -o IdentitiesOnly=no -o "PubkeyAcceptedAlgorithms=$KEY_ALGO" -o UserKnownHostsFile="$KNOWN_HOSTS" -o StrictHostKeyChecking=yes -T git@github.com 2>&1 || true)"
+  # GitHub's greeting is one line of that output, on the same stream as ssh's
+  # own warnings, which come first (the IP address of the pinned host being
+  # recorded, on a first connection): the line is read, not the output.
+  greeting="$(printf '%s\n' "$output" | grep -m1 '^Hi ' || true)"
   case "$greeting" in
     "Hi $BOT_LOGIN!"*) ok "GitHub authenticates the key as $BOT_LOGIN" ;;
     Hi\ *) err "GitHub authenticates the key as a different account: ${greeting%%!*}! — register it on $BOT_LOGIN instead"; exit 1 ;;
-    *) err "GitHub did not authenticate the key: $greeting"; err "register the public key on $BOT_LOGIN as an authentication key (and as a signing key)"; exit 1 ;;
+    *) err "GitHub did not authenticate the key: $output"; err "register the public key on $BOT_LOGIN as an authentication key (and as a signing key)"; exit 1 ;;
   esac
 }
 
