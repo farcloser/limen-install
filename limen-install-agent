@@ -293,7 +293,7 @@ merge_settings() {
   SOCKET="$AGENT_SOCKET" GITCONFIG_PATH="$GITCONFIG" \
   ROOT="$AGENT_ROOT" WRITE_DIRS="$(printf '%s\n' ${WRITE[@]+"${WRITE[@]}"})" USER_HOME="$HOME" \
   python3 - "$SETTINGS" <<'PY'
-import json, os, sys
+import json, os, string, sys
 path = sys.argv[1]
 with open(path) as f:
     settings = json.load(f)
@@ -359,7 +359,14 @@ fs["allowWrite"] = writes + [tilde(root)] + [p for p in kept if p not in writes 
 # the keychain: a client has to open it, and gh keeps its token there. Edits:
 # every dotfile letter that holds no sandbox write location (.l* and .n* do),
 # the launch agents and app data, and each project's own settings and hooks.
-# Paths in ~ form, which the rule engine and the sandbox both expand.
+# Then every letter of the home, both cases: a read deny on each letter except
+# A (Applications: the Go toolchain), L (Library: its stores are denied one by
+# one above, the rest is cache a session reads), P (Projects: the session roots;
+# Pictures and Public are denied by their first two letters) and V (Vault: the
+# target of the ~/.gitconfig symlink), and an edit deny on each letter except L
+# and P. A rule on a letter is future-proof: a directory created tomorrow is
+# denied the day it appears. Paths in ~ form, which the rule engine and the
+# sandbox both expand.
 deny = settings.setdefault("permissions", {}).setdefault("deny", [])
 reads = (".Trash", ".a*", ".b*", ".claude.json*", ".codex", ".config", ".d*", ".gemini",
          ".gnupg", ".lima", ".netrc", ".o*", ".p*", ".s*", ".z*",
@@ -367,10 +374,15 @@ reads = (".Trash", ".a*", ".b*", ".claude.json*", ".codex", ".config", ".d*", ".
          "Library/Application Support/Google", "Library/Application Support/taciturn/keys",
          "Library/Cookies", "Library/Group Containers",
          "Library/Mail", "Library/Messages", "Library/Safari")
-edits = (".a*", ".b*", ".c*", ".d*", ".g*", ".o*", ".p*", ".rc", ".s*", ".z*",
+edits = (".a*", ".b*", ".c*", ".d*", ".g*", ".local/bin", ".local/share/claude", ".o*",
+         ".p*", ".rc", ".s*", ".z*",
          "Library/Application Support", "Library/LaunchAgents", "Library/Preferences")
+letters = [c + "*" for c in string.ascii_letters]
+read_skip, edit_skip = "alpvALPV", "lpLP"
 baseline = ["Read(~/" + p + ")" for p in reads] + ["Read(**/.env)", "Read(**/.env.*)"]
+baseline += ["Read(~/" + l + ")" for l in letters if l[0] not in read_skip] + ["Read(~/Pi*)", "Read(~/Pu*)"]
 baseline += ["Edit(~/" + p + ")" for p in edits]
+baseline += ["Edit(~/" + l + ")" for l in letters if l[0] not in edit_skip] + ["Edit(~/Pi*)", "Edit(~/Pu*)"]
 baseline += ["Edit(./.claude/hooks)", "Edit(./.claude/settings.json)", "Edit(./.claude/settings.local.json)"]
 for rule in baseline:
     if rule not in deny:
