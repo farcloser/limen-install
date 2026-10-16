@@ -424,6 +424,11 @@ for key, wanted in (("allowedDomains", [
          "specifications.freedesktop.org",
          # proxy.golang.org redirects module downloads here
          "storage.googleapis.com", "tmaproduction.blob.core.windows.net",
+         # GitHub redirects Actions job logs and artifacts to twenty storage accounts
+         # of its own; `gh run view --log` and `gh run download` read from them. Named
+         # one by one: the proxy takes no label-prefix wildcard, and the apex
+         # *.blob.core.windows.net would open every Azure storage account.
+         *["productionresultssa%d.blob.core.windows.net" % i for i in range(20)],
          "unicode.org", "*.unicode.org", "unlicense.org", "website-godolint.pages.dev",
          "*.wikipedia.org",
 ]), ("deniedDomains", [
