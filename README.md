@@ -93,7 +93,8 @@ Before running it, three manual steps:
 2. **[taciturn](https://github.com/forkcloser/taciturn)** installed and its agent
    loaded (`taciturn install`), and a key created for the bot that signs
    without a prompt, allowed for `git@github.com` and for the `git` sshsig
-   namespace (`taciturn key create`, `key allow`, `key sshsig`) — the
+   namespace (`taciturn key create` with the fork's `ssh` and `ssh-keygen` as
+   its peers, `key allow`, `key sshsig`) — the
    repository rulesets (pull requests, signed commits) are the veto, not a
    touch the human ends up performing blindly. Its public key,
    `taciturn key list --format ssh`, goes to a file. A machine still on
