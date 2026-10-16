@@ -94,6 +94,10 @@ case "$FORK_SSH" in
   *) err "ssh resolves to ${FORK_SSH:-nothing}, not to forkcloser/openssh from the machine toolset — run limen-install first"; exit 1 ;;
 esac
 readonly FORK_SSH FORK_KEYGEN="$FORK_SSH-keygen" FORK_ADD="$FORK_SSH-add"
+# The fork's two clients as taciturn's peer globs: aqua's package directory is
+# version, archive, archive directory, bin, so the version-bearing components
+# are globbed and a pin bump keeps the key's peers.
+readonly FORK_GLOB="${FORK_SSH%/openssh/*}/openssh/*/*/*/bin"
 [ -x "$FORK_KEYGEN" ] && [ -x "$FORK_ADD" ] || { err "no ssh-keygen and ssh-add beside $FORK_SSH"; exit 1; }
 # The bot has one key, and ssh offers a key only when its algorithm is in the
 # accepted list; the fork's default list carries no ECDSA. A named list, the
@@ -458,7 +462,7 @@ verify() {
   local blob
   blob="$(printf '%s' "$BOT_KEY" | awk '{print $2}')"
   if ! SSH_AUTH_SOCK="$AGENT_SOCKET" "$FORK_ADD" -L 2>/dev/null | grep -qF "$blob"; then
-    err "the agent at $AGENT_SOCKET does not serve the key in $BOT_KEY_FILE — the agent lists a key only once its policy allows something: taciturn key create <name>; taciturn key allow <name> --user git --host github.com --known-hosts $KNOWN_HOSTS; taciturn key sshsig <name> --namespace git; then re-run"
+    err "the agent at $AGENT_SOCKET does not serve the key in $BOT_KEY_FILE — the agent lists a key only once its policy allows something: taciturn key create <name> -use locked -peers 'path=$FORK_GLOB/ssh,path=$FORK_GLOB/ssh-keygen'; taciturn key allow <name> --user git --host github.com --known-hosts $KNOWN_HOSTS; taciturn key sshsig <name> --namespace git; then re-run"
     exit 1
   fi
   ok "agent serves the bot key"
