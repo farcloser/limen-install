@@ -10,44 +10,42 @@ Desktop.ini
 *~
 
 # Scratch / work-in-progress files
-*.local
+# *.local
 _scratch/
-WIP_*
+# WIP_*
 
 # Build output and Go artifacts (subprojects keep their own .gitignore too)
-/build
 
 # =========================
 #  Rust
 # =========================
 # Cargo build output
-/target/
+# /target/
 # Cargo.lock: COMMIT for binaries/apps, IGNORE for libraries.
 # Uncomment the next line ONLY if this is a published library crate:
 # Cargo.lock
 # Backup files from `cargo fmt` / rustfmt edits
-**/*.rs.bk
+# **/*.rs.bk
 # MSVC debug info (Windows toolchain)
-*.pdb
+# *.pdb
 
 # =========================
 #  Svelte / SvelteKit / Node
 # =========================
 # Dependencies
-node_modules/
+# node_modules/
 # SvelteKit build + generated types/runtime
-.svelte-kit/
+# .svelte-kit/
 # Vite cache/output
-.vite/
-vite.config.*.timestamp-*
+# .vite/
+# vite.config.*.timestamp-*
 # Package manager debug logs
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
+# npm-debug.log*
+# yarn-debug.log*
+# yarn-error.log*
+# pnpm-debug.log*
 
 # --- added by limen fix: baseline patterns ---
-/tmp
 
 # Required by limen (book/mandatory-files.md, ".gitignore").
 .claude
