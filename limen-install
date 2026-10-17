@@ -221,7 +221,7 @@ registries:
     type: local
     path: registry.yaml
 packages:
-  - name: farcloser/limen@v0.12.0 # renovate: depName=farcloser/limen
+  - name: farcloser/limen@v0.12.1 # renovate: depName=farcloser/limen
     registry: farcloser
   - name: forkcloser/openssh@v10.6.1.2 # renovate: depName=forkcloser/openssh
     registry: farcloser
