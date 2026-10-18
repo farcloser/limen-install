@@ -1,88 +1,69 @@
 #!/usr/bin/env bash
 #
-# limen-install — set up / update a dev machine's global aqua toolchain.
-# The global toolchain is ONE tool: limen, the project scaffolder, installed
-# from farcloser/limen's GitHub releases through the local aqua registry
-# embedded below — no separate config repo, no fetch. (GITHUB_TOKEN is honored
-# when set: API rate limits.)
+# limen-install — set up / update a dev machine's toolset: hermetic, the
+# toolset's own aqua (forkcloser/hermetic), in a root of its own, and through
+# it limen, the project scaffolder, plus on macOS/arm64 the OpenSSH fork and
+# taciturn. The pins live in the root, written below — no separate config
+# repo, no fetch. (GITHUB_TOKEN is honored when set: API rate limits.)
 #
-# Per-project setup is separate: `aqua policy allow && aqua i -l` inside a repo.
+# Per-project setup is separate: `hermetic policy allow && hermetic i -l`
+# inside a repo. A shell's own aqua, if it has one, is untouched: nothing of
+# the toolset is exported into the shell beyond one PATH entry.
 
 set -euo pipefail
 
-# On Windows (git-bash), aqua and its installer root at %LOCALAPPDATA%
-# (= $HOME/AppData/Local), not XDG's ~/.local/share — align with aqua's own
-# convention rather than pinning against it. That is the ONLY windows
-# accommodation needed: git-bash converts POSIX-form env values (paths and
-# even colon-lists) to native form when spawning native binaries, so the
-# config/policy exports below reach aqua.exe correctly as they are.
+# The root: HERMETIC_ROOT_DIR, or the binary's own default for the platform,
+# which is primordium's data directory for the name. Kept in UNEXPANDED form:
+# this exact text goes into the shell rc, so the rc keeps tracking $HOME and
+# XDG_DATA_HOME at shell startup (and survives dotfile syncs across machines)
+# instead of freezing today's absolute paths. The script evaluates it for its
+# own use. On Windows (git-bash) the binary roots at %LOCALAPPDATA%, which
+# git-bash inherits, so the expression follows the variable wherever it points.
 case "$OSTYPE" in
   msys*|cygwin*)
     # shellcheck disable=SC2016
-    AQUA_BIN_EXPR='${AQUA_ROOT_DIR:-$HOME/AppData/Local/aquaproj-aqua}/bin' ;;
+    ROOT_EXPR='${HERMETIC_ROOT_DIR:-${LOCALAPPDATA:-$HOME/AppData/Local}/hermetic}' ;;
+  darwin*)
+    # shellcheck disable=SC2016
+    ROOT_EXPR='${HERMETIC_ROOT_DIR:-$HOME/Library/Application Support/hermetic}' ;;
   *)
     # shellcheck disable=SC2016
-    AQUA_BIN_EXPR='${AQUA_ROOT_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/aquaproj-aqua}/bin' ;;
+    ROOT_EXPR='${HERMETIC_ROOT_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/hermetic}' ;;
 esac
-readonly AQUA_BIN_EXPR
+readonly ROOT_EXPR
+ROOT="$(eval "echo \"$ROOT_EXPR\"")"
+readonly ROOT
+# The preset is remembered: when set, the rc and the nightly runner carry the
+# actual custom path, since the default expression would point elsewhere.
+HERMETIC_ROOT_DIR_PRESET="${HERMETIC_ROOT_DIR:-}"
+readonly HERMETIC_ROOT_DIR_PRESET
 
 # Every tool this script runs is the system's, for the whole run. On a machine
-# that already has limen, cat, mkdir, mktemp, rm, curl and the rest of coreutils
-# on PATH are aqua proxies, and a proxy parses the global config before it runs
-# anything: `cat > "$AQUA_GLOBAL_CONFIG" <<YAML` truncates that file before cat
-# starts, the proxy reads an empty YAML and fails, and set -e leaves the file
-# empty, which breaks every proxy on the machine. aqua's own directory comes
-# next, ahead of any other aqua (a brew one would break every recipe), for
-# `aqua` and, once installed, `limen`.
-PATH="/usr/bin:/bin:/usr/sbin:/sbin:$(eval "echo \"$AQUA_BIN_EXPR\""):$PATH"
+# that already has the toolset, cat, mkdir, mktemp, rm, curl and the rest of
+# coreutils on PATH may be a project's shims, and a shim parses its config
+# before it runs anything: `cat > file <<YAML` truncates the file before cat
+# starts. The root's bin comes next, for `hermetic` and, once installed,
+# `limen`. The root's bin has a space in it on macOS: quoted wherever it is
+# spliced.
+PATH="/usr/bin:/bin:/usr/sbin:/sbin:$ROOT/bin:$PATH"
 export PATH
 
-# The version is Renovate-managed (see renovate.json5); the sha256 of the
-# installer script, which must change with it, is recomputed on Renovate's
+# The version is Renovate-managed (see renovate.json); the sha256 is of the
+# release's checksums.txt, which must change with it, recomputed on Renovate's
 # branches by update-installer-checksum.yaml — the pair always moves together.
-# renovate: depName=aquaproj/aqua-installer
-readonly AQUA_INSTALLER_VERSION="v4.1.0"
-readonly AQUA_INSTALLER_SHA256="4d3e513d42f425609c1ead6ecd40b9c62492011979dfe23d7012428a59efbe82"
-
-# Keep in step with setup-aqua's pin. No checksum companion: the verified
-# installer above performs this download. Renovate-managed (see renovate.json5).
-# renovate: depName=aquaproj/aqua
-readonly AQUA_VERSION="v2.64.0"
-
-# The default locations, kept in UNEXPANDED form: this exact text goes into the
-# shell rc, so the rc keeps tracking $HOME / XDG_CONFIG_HOME at shell startup
-# (and survives dotfile syncs across machines) instead of freezing today's
-# absolute paths. The script evaluates them for its own use below.
-# shellcheck disable=SC2016
-readonly CONFIG_EXPR='${XDG_CONFIG_HOME:-$HOME/.config}/aqua/aqua.yaml'
-# shellcheck disable=SC2016
-readonly POLICY_EXPR='${XDG_CONFIG_HOME:-$HOME/.config}/aqua/aqua-policy.yaml'
-
-# Overridable for ONE reason: this is aqua's OWN env var. If aqua is already told
-# where its global config lives, we must write the file there so aqua reads it.
-# Exported once here so `aqua` (a child process) inherits it everywhere below.
-# The preset is remembered: when set, the rc must carry the actual custom path —
-# the default expression above would point at files that are not there.
-AQUA_GLOBAL_CONFIG_PRESET="${AQUA_GLOBAL_CONFIG:-}"
-readonly AQUA_GLOBAL_CONFIG_PRESET
-export AQUA_GLOBAL_CONFIG="${AQUA_GLOBAL_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/aqua/aqua.yaml}"
-CONFIG_DIR="$(dirname "$AQUA_GLOBAL_CONFIG")"
-readonly CONFIG_DIR
-readonly POLICY_FILE="$CONFIG_DIR/aqua-policy.yaml"
-
-# The global policy must be visible to EVERY aqua invocation — aqua enforces
-# policy at exec time, not just install time, so without this even running
-# `limen` fails with "this package isn't allowed". Appended, never assigned:
-# aqua accepts a colon-separated list, and per-project policies prepend theirs.
-export AQUA_POLICY_CONFIG="$POLICY_FILE${AQUA_POLICY_CONFIG:+:$AQUA_POLICY_CONFIG}"
+# One digest covers every platform: the asset is verified against
+# checksums.txt, and checksums.txt against this.
+# renovate: depName=forkcloser/hermetic
+readonly HERMETIC_VERSION="v0.2.0"
+readonly HERMETIC_CHECKSUMS_SHA256="d5ed4550db1618267df50ef39f3d7dc4d82c5dd1f1060c72458d654a6c5f9f02"
 
 SHELL_CHANGED=0   # set to 1 if we modify the shell rc (→ advise opening a new shell)
 
 # The nightly update job, macOS only for now: a launchd agent that fetches the
 # latest release of this script over https and runs it. The runner lives under
 # XDG data, the agent's plist and log where launchd and Console look. Under
-# launchd the rc is never sourced, so the runner exports aqua's variables
-# itself, and LIMEN_INSTALL_NIGHTLY tells this script it is that run.
+# launchd the rc is never sourced, so the runner exports a preset root itself,
+# and LIMEN_INSTALL_NIGHTLY tells this script it is that run.
 readonly NIGHTLY_LABEL="world.farcloser.limen-install"
 readonly NIGHTLY_HOUR=4 NIGHTLY_MINUTE=17
 NIGHTLY_RUNNER="${XDG_DATA_HOME:-$HOME/.local/share}/limen-install/nightly"
@@ -91,6 +72,7 @@ readonly NIGHTLY_PLIST="$HOME/Library/LaunchAgents/$NIGHTLY_LABEL.plist"
 readonly NIGHTLY_LOG="$HOME/Library/Logs/limen-install.log"
 LAUNCHD_FAILED=0  # set to 1 when a service could not be loaded (→ exit 1 at the end)
 is_macos() { [ "$(uname -s)" = Darwin ]; }
+is_windows() { case "$OSTYPE" in msys*|cygwin*) return 0 ;; *) return 1 ;; esac; }
 
 log() { printf '› %s\n' "$*"; }
 ok()  { printf '✓ %s\n' "$*"; }
@@ -108,36 +90,77 @@ verify_sha256() {  # $1=file $2=expected
   fi
 }
 
-install_aqua() {
-  if command -v aqua >/dev/null 2>&1; then
-    # Converge, do not skip: a re-run moves an existing aqua to the pin —
-    # without this the version would stay frozen at whatever the machine got
-    # first (this script is the update path too).
-    aqua --log-level warn update-aqua "$AQUA_VERSION"
-    ok "aqua ${AQUA_VERSION}"
+# The release asset for this machine: hermetic_<version>_<os>_<arch>.tar.gz.
+# LIMEN_INSTALL_ARCH is the truth when set: limen-install.ps1 reads the
+# machine's architecture from the registry, since git-bash on arm64 Windows
+# runs emulated and `uname -m` says x86_64 there.
+hermetic_asset() {
+  local os arch
+  case "$(uname -s)" in
+    Darwin) os=darwin ;;
+    Linux) os=linux ;;
+    MINGW*|MSYS*|CYGWIN*) os=windows ;;
+    *) err "unsupported system: $(uname -s)"; exit 1 ;;
+  esac
+  case "${LIMEN_INSTALL_ARCH:-$(uname -m)}" in
+    arm64|aarch64|ARM64) arch=arm64 ;;
+    x86_64|amd64|AMD64) arch=amd64 ;;
+    *) err "unsupported architecture: ${LIMEN_INSTALL_ARCH:-$(uname -m)}"; exit 1 ;;
+  esac
+  echo "hermetic_${HERMETIC_VERSION#v}_${os}_${arch}.tar.gz"
+}
+
+hermetic_bin() {
+  if is_windows; then echo "$ROOT/bin/hermetic.exe"; else echo "$ROOT/bin/hermetic"; fi
+}
+
+# The binary, at the pinned version, under the pinned checksums.txt: a re-run
+# moves an installed one to the pin — without this the version would stay
+# frozen at whatever the machine got first (this script is the update path
+# too). GitHub's build provenance is verified as well where gh is installed
+# and signed in; the checksum chain is the guard everywhere.
+install_hermetic() {
+  local bin asset
+  bin="$(hermetic_bin)"
+  asset="$(hermetic_asset)"
+  if [ -x "$bin" ] && [ "$("$bin" version 2>/dev/null || true)" = "${HERMETIC_VERSION#v}" ]; then
+    ok "hermetic ${HERMETIC_VERSION}"
     return
   fi
-  log "installing aqua ${AQUA_VERSION} (installer ${AQUA_INSTALLER_VERSION})"
+  log "installing hermetic ${HERMETIC_VERSION} (${asset})"
   local t; t="$(mktemp -d "${TMPDIR:-/tmp}/limen-install.XXXXXX")"
-  curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o "$t/i" \
-    "https://raw.githubusercontent.com/aquaproj/aqua-installer/${AQUA_INSTALLER_VERSION}/aqua-installer"
-  verify_sha256 "$t/i" "$AQUA_INSTALLER_SHA256"
-  chmod +x "$t/i"
-  # Apple's mktemp ignores TMPDIR and lands in the per-user temp directory,
-  # and the installer calls it bare: under a TMPDIR set on purpose (a sandbox
-  # that denies that directory) it would die there. A shim first on the
-  # child's PATH gives a bare call a template under TMPDIR; a call that
-  # carries its own template is left alone.
-  mkdir -p "$t/bin"
-  cat > "$t/bin/mktemp" <<'SHIM'
-#!/bin/sh
-real="$(PATH=/usr/bin:/bin command -v mktemp)"
-for a in "$@"; do case "$a" in -*) ;; *) exec "$real" "$@" ;; esac; done
-exec "$real" "$@" "${TMPDIR:-/tmp}/aqua-installer.XXXXXX"
-SHIM
-  chmod +x "$t/bin/mktemp"
-  PATH="$t/bin:$PATH" "$t/i" -v "$AQUA_VERSION"; rm -rf "$t"
-  ok "aqua ${AQUA_VERSION} installed"
+  local base="https://github.com/forkcloser/hermetic/releases/download/${HERMETIC_VERSION}"
+  curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
+    -o "$t/checksums.txt" "$base/checksums.txt"
+  verify_sha256 "$t/checksums.txt" "$HERMETIC_CHECKSUMS_SHA256"
+  curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
+    -o "$t/$asset" "$base/$asset"
+  local expected
+  expected="$(awk -v a="$asset" '$2 == a {print $1}' "$t/checksums.txt")"
+  [ -n "$expected" ] || { err "checksums.txt of hermetic ${HERMETIC_VERSION} does not list $asset"; exit 1; }
+  verify_sha256 "$t/$asset" "$expected"
+  if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+    gh attestation verify "$t/$asset" --repo forkcloser/hermetic >/dev/null 2>&1 \
+      || { err "GitHub attestation of $asset does not verify (gh attestation verify)"; exit 1; }
+    ok "hermetic ${HERMETIC_VERSION}: checksum and attestation verified"
+  else
+    ok "hermetic ${HERMETIC_VERSION}: checksum verified (gh not signed in: no attestation check)"
+  fi
+  tar -xzf "$t/$asset" -C "$t" "${bin##*/}"
+  mkdir -p "$ROOT/bin"
+  # Replaced by renaming the old one aside and moving the new in: a symlink
+  # to the name survives; a hard link (Windows) and a running dispatch hold
+  # the old file, so it is set aside, not overwritten, and the install below
+  # recreates every link whose identity moved. The old file goes when nothing
+  # holds it any more.
+  if [ -e "$bin" ]; then
+    mv -f "$bin" "$bin.old"
+  fi
+  mv -f "$t/${bin##*/}" "$bin"
+  chmod 755 "$bin"
+  rm -f "$bin.old" 2>/dev/null || true
+  rm -rf "$t"
+  ok "hermetic ${HERMETIC_VERSION} installed: $bin"
 }
 
 shell_rc() {
@@ -156,7 +179,7 @@ shell_rc() {
 preflight_writes() {
   local rc p dir probe
   rc="$(shell_rc)"
-  set -- "$CONFIG_DIR" "$(eval "echo \"$AQUA_BIN_EXPR\"")" "${rc%/*}"
+  set -- "$ROOT/bin" "${rc%/*}"
   if is_macos; then
     set -- "$@" "${NIGHTLY_RUNNER%/*}" "${NIGHTLY_PLIST%/*}" "${NIGHTLY_LOG%/*}"
   fi
@@ -172,47 +195,42 @@ preflight_writes() {
   done
 }
 
+# One rc line: the root's bin on PATH. Default root → the unexpanded
+# expression (the rc stays $HOME/XDG relative); preset HERMETIC_ROOT_DIR →
+# the actual custom path. Appended last, so it comes first on PATH, ahead of
+# an aqua bin a previous installer put there.
 ensure_shell_config() {
-  local rc
+  local rc path_value
   rc="$(shell_rc)"
-  # Guard with the exact literal we write (grep -F): the expression contains a
-  # "}" between "aquaproj-aqua" and "/bin", so any looser hand-written pattern
-  # silently never matches and the block gets re-appended on every run.
-  if ! grep -qF "$AQUA_BIN_EXPR" "$rc" 2>/dev/null; then
+  path_value="$ROOT_EXPR/bin"
+  if [ -n "$HERMETIC_ROOT_DIR_PRESET" ]; then
+    path_value="$HERMETIC_ROOT_DIR_PRESET/bin"
+  fi
+  # Guard with the exact literal we write (grep -F): a looser hand-written
+  # pattern silently never matches and the line gets re-appended on every run.
+  if ! grep -qF "$path_value" "$rc" 2>/dev/null; then
     # shellcheck disable=SC2016
-    printf '\n# aqua\nexport PATH="%s:$PATH"\n' "$AQUA_BIN_EXPR" >> "$rc"
+    printf '\n# hermetic\nexport PATH="%s:$PATH"\n' "$path_value" >> "$rc"
     SHELL_CHANGED=1
   fi
-  # Default install → write the unexpanded expressions (rc stays $HOME/XDG
-  # relative); preset AQUA_GLOBAL_CONFIG → write the actual custom paths.
-  local config_value="$CONFIG_EXPR" policy_value="$POLICY_EXPR"
-  if [ -n "$AQUA_GLOBAL_CONFIG_PRESET" ]; then
-    config_value="$AQUA_GLOBAL_CONFIG"
-    policy_value="$POLICY_FILE"
-  fi
-  if ! grep -qF 'AQUA_GLOBAL_CONFIG' "$rc" 2>/dev/null; then
-    printf 'export AQUA_GLOBAL_CONFIG="%s"\n' "$config_value" >> "$rc"
-    SHELL_CHANGED=1
-  fi
-  if ! grep -qF 'AQUA_POLICY_CONFIG' "$rc" 2>/dev/null; then
-    # Appended, never assigned (see the export above) — a plain assignment here
-    # would clobber per-project policies, or be clobbered by them.
-    # shellcheck disable=SC2016
-    printf 'export AQUA_POLICY_CONFIG="%s${AQUA_POLICY_CONFIG:+:$AQUA_POLICY_CONFIG}"\n' "$policy_value" >> "$rc"
-    SHELL_CHANGED=1
+  # The previous installer's three lines are the human's to remove (the
+  # migration list in forkcloser/hermetic's docs/design.md); said once.
+  if grep -qE 'aquaproj-aqua}?/bin|AQUA_GLOBAL_CONFIG=|AQUA_POLICY_CONFIG=' "$rc" 2>/dev/null; then
+    log "$rc still carries the previous installer's aqua lines (the # aqua PATH entry, AQUA_GLOBAL_CONFIG, AQUA_POLICY_CONFIG): remove them; the toolset no longer reads them"
   fi
 }
 
-# Renovate bumps the limen pin below, grouped with aqua.yaml's — do not
-# hand-edit it out of step.
+# Renovate bumps the pins below, grouped with aqua.yaml's — do not hand-edit
+# them out of step.
 write_config() {
-  mkdir -p "$CONFIG_DIR"
+  mkdir -p "$ROOT"
 
-  cat > "$AQUA_GLOBAL_CONFIG" <<'YAML'
+  cat > "$ROOT/hermetic.yaml" <<'YAML'
 ---
-# Global aqua config — the machine toolset: limen, the project scaffolder,
-# OpenSSH with security keys built in, and taciturn, the Secure Enclave
-# ssh-agent. Written by limen-install; edits are overwritten on the next run.
+# The toolset's pins: limen, the project scaffolder, OpenSSH with security
+# keys built in, and taciturn, the Secure Enclave ssh-agent. hermetic's global
+# config, read from its root. Written by limen-install; edits are overwritten
+# on the next run.
 checksum:
   enabled: true
   require_checksum: true
@@ -221,9 +239,9 @@ registries:
     type: local
     path: registry.yaml
 packages:
-  - name: farcloser/limen@v0.12.1 # renovate: depName=farcloser/limen
+  - name: farcloser/limen@v0.13.0 # renovate: depName=farcloser/limen
     registry: farcloser
-  - name: forkcloser/openssh@v10.6.1.2 # renovate: depName=forkcloser/openssh
+  - name: forkcloser/openssh@v10.6.1.3 # renovate: depName=forkcloser/openssh
     registry: farcloser
   - name: forkcloser/taciturn@v0.2.0 # renovate: depName=forkcloser/taciturn
     registry: farcloser
@@ -231,8 +249,8 @@ YAML
 
   # The registry entry mirrors what goreleaser publishes: per-platform tar.gz
   # archives named limen_<version>_<os>_<arch>.tar.gz plus a checksums.txt that
-  # aqua pins from (see update-checksum below).
-  cat > "$CONFIG_DIR/registry.yaml" <<'YAML'
+  # the checksums are pinned from (see update-checksum below).
+  cat > "$ROOT/registry.yaml" <<'YAML'
 ---
 # Written by limen-install; edits are overwritten on the next run.
 packages:
@@ -264,8 +282,8 @@ packages:
       - darwin
       - linux
       - windows
-  # OpenSSH with security keys built in, relocatable, darwin/arm64 only: aqua
-  # skips the package elsewhere. The entry is the one forkcloser/openssh's
+  # OpenSSH with security keys built in, relocatable, darwin/arm64 only: the
+  # package is skipped elsewhere. The entry is the one forkcloser/openssh's
   # README carries; the release attests every asset and ships checksums.txt.
   - type: github_release
     repo_owner: forkcloser
@@ -318,7 +336,7 @@ packages:
     files:
       - name: taciturn
         src: Taciturn.app/Contents/MacOS/taciturn
-    # aqua consults version_overrides only when the entry itself carries a
+    # version_overrides is consulted only when the entry itself carries a
     # version_constraint; without this line every version takes the files above.
     version_constraint: semver(">= 0.2.0")
     version_overrides:
@@ -335,7 +353,7 @@ packages:
       - darwin/arm64
 YAML
 
-  cat > "$POLICY_FILE" <<'YAML'
+  cat > "$ROOT/policy.yaml" <<'YAML'
 ---
 # Written by limen-install; edits are overwritten on the next run.
 registries:
@@ -346,29 +364,39 @@ packages:
   - registry: farcloser
 YAML
 
-  ok "global config written: ${CONFIG_DIR} (aqua.yaml, registry.yaml, aqua-policy.yaml)"
+  ok "toolset pins written: ${ROOT} (hermetic.yaml, registry.yaml, policy.yaml)"
 }
 
+# The toolset into the root's store, and the links into the root's bin. The
+# config is named outright with -c: hermetic's own walk looks for a project's
+# .hermetic/hermetic.yaml, never for this file, and update-checksum without
+# a named config writes nothing. --log-level warn: the install lines are
+# noise on a nightly log; a failure is still printed and ends the run.
 install_tools() {
-  aqua policy allow "$POLICY_FILE"
-  (cd "$CONFIG_DIR" && aqua --log-level warn update-checksum --prune && aqua --log-level warn i -a)
+  local h; h="$(hermetic_bin)"
+  "$h" --log-level warn -c "$ROOT/hermetic.yaml" update-checksum --prune
+  "$h" --log-level warn -c "$ROOT/hermetic.yaml" install -a
   ok "scaffolder ready: $(limen version 2>/dev/null || echo 'open a new shell, then run: limen version')"
 }
 
+# Where a toolset package lives, for the launchd steps below: hermetic
+# resolves the name from the root's pins wherever it runs.
+toolset_which() { "$(hermetic_bin)" which "$1" 2>/dev/null; }
+
 # The ssh-agent launchd agent runs the package by its real path (launchd has
-# no aqua proxy to resolve), so an upgrade would leave it on the old binary,
-# whose sk-helper then fails every signature. On macOS the agent is part of
-# the toolset: when the loaded agent is not the pinned package — none loaded,
-# an older one, a hand-unpacked one — the package's ssh-agent-install boots
-# the label out, writes the plist to its own path and bootstraps it. Only a
-# test holds back: the smoke installs into a throwaway HOME that shares the
+# no shim to resolve), so an upgrade would leave it on the old binary, whose
+# sk-helper then fails every signature. On macOS the agent is part of the
+# toolset: when the loaded agent is not the pinned package — none loaded, an
+# older one, a hand-unpacked one — the package's ssh-agent-install boots the
+# label out, writes the plist to its own path and bootstraps it. Only a test
+# holds back: the smoke installs into a throwaway HOME that shares the
 # machine's launchd domain, and it says so with LIMEN_INSTALL_NO_LAUNCHD,
 # which keeps every service, this one and the nightly job, unloaded.
 readonly SSH_AGENT_LABEL="org.forkcloser.ssh_agent"
 refresh_ssh_agent() {
   is_macos || return 0
   local pkg running
-  pkg="$(cd "$CONFIG_DIR" && aqua which ssh-agent-install 2>/dev/null)" || return 0
+  pkg="$(toolset_which ssh-agent-install)" || return 0
   pkg="${pkg%/bin/ssh-agent-install}"
   # launchctl exits 113 for a label it does not know, which pipefail would
   # turn into this function's exit: an unloaded agent is a case, not an error.
@@ -384,7 +412,7 @@ refresh_ssh_agent() {
   log "ssh-agent: $SSH_AGENT_LABEL ${running:+runs $running, }${running:-not loaded; }installing the pinned package's agent"
   # Not fatal: ssh-agent-install ends in a launchctl bootstrap, which a session
   # without the GUI domain (ssh) cannot do; said, and the run ends red.
-  if (cd "$CONFIG_DIR" && ssh-agent-install); then
+  if ssh-agent-install; then
     ok "ssh-agent: $SSH_AGENT_LABEL runs the pinned package"
   else
     err "ssh-agent: ssh-agent-install failed — from a logged-in terminal, run limen-install again"
@@ -404,7 +432,7 @@ readonly SSHD_LABEL="org.forkcloser.sshd"
 refresh_sshd() {
   is_macos || return 0
   local pkg program
-  pkg="$(cd "$CONFIG_DIR" && aqua which sshd-install 2>/dev/null)" || return 0
+  pkg="$(toolset_which sshd-install)" || return 0
   pkg="${pkg%/bin/sshd-install}"
   program="$({ launchctl print "gui/$(id -u)/$SSHD_LABEL" 2>/dev/null || true; } | sed -n 's#^[[:space:]]*program = \(/.*\)$#\1#p' | head -n 1)"
   if [ -z "$program" ]; then
@@ -422,7 +450,7 @@ refresh_sshd() {
     return 0
   fi
   log "sshd: $SSHD_LABEL runs $program, the pin is $pkg: moving the server onto it"
-  if (cd "$CONFIG_DIR" && sshd-install); then
+  if sshd-install; then
     ok "sshd: $SSHD_LABEL runs the pinned package"
   else
     err "sshd: sshd-install failed — from a logged-in terminal, run limen-install again"
@@ -441,7 +469,7 @@ readonly TACITURN_LABEL="org.forkcloser.taciturn"
 refresh_taciturn() {
   is_macos || return 0
   local pkg program
-  pkg="$(cd "$CONFIG_DIR" && aqua which taciturn 2>/dev/null)" || return 0
+  pkg="$(toolset_which taciturn)" || return 0
   pkg="${pkg%/taciturn}"
   program="$({ launchctl print "gui/$(id -u)/$TACITURN_LABEL" 2>/dev/null || true; } | sed -n 's#^[[:space:]]*program = \(/.*\)$#\1#p' | head -n 1)"
   if [ -z "$program" ]; then
@@ -459,7 +487,7 @@ refresh_taciturn() {
     return 0
   fi
   log "taciturn: $TACITURN_LABEL runs $program, the pin is $pkg: moving the agent onto it"
-  if (cd "$CONFIG_DIR" && taciturn install); then
+  if taciturn install; then
     ok "taciturn: $TACITURN_LABEL runs the pinned package"
   else
     err "taciturn: taciturn install failed — from a logged-in terminal, run limen-install again"
@@ -478,6 +506,13 @@ install_nightly() {
   fi
 
   mkdir -p "${NIGHTLY_RUNNER%/*}" "${NIGHTLY_PLIST%/*}" "${NIGHTLY_LOG%/*}"
+
+  # A preset root travels into the runner, since launchd sources no rc; the
+  # default root is the binary's own and needs no variable.
+  local root_export=""
+  if [ -n "$HERMETIC_ROOT_DIR_PRESET" ]; then
+    root_export="export HERMETIC_ROOT_DIR=\"$HERMETIC_ROOT_DIR_PRESET\""
+  fi
 
   # Written beside and moved into place: the nightly run is this very runner,
   # still being read by its shell, and a longer text written over it would be
@@ -498,8 +533,7 @@ log="$NIGHTLY_LOG"
 if [ -f "\$log" ] && [ "\$(wc -c < "\$log")" -gt 1048576 ]; then
   tail -c 262144 "\$log" > "\$log.trim" && cat "\$log.trim" > "\$log" && rm -f "\$log.trim"
 fi
-export AQUA_GLOBAL_CONFIG="$AQUA_GLOBAL_CONFIG"
-export AQUA_POLICY_CONFIG="$POLICY_FILE"
+$root_export
 export LIMEN_INSTALL_NIGHTLY=1
 url=\$(curl --proto '=https' --tlsv1.2 -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/farcloser/limen-install/releases/latest)
 tag=\${url##*/}
@@ -575,7 +609,7 @@ PLIST
 }
 
 preflight_writes
-install_aqua
+install_hermetic
 ensure_shell_config
 write_config
 install_tools

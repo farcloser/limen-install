@@ -44,7 +44,11 @@ function Handoff {
     # The whole point of this script: continue with the real installer under
     # git-bash. Absolute bash path -- the PATH of THIS session predates the
     # install. Login shell (-l): /mingw64/bin (curl) joins the PATH there.
+    # The machine architecture travels along: git-bash on arm64 Windows runs
+    # emulated, and `uname -m` there says x86_64, which would fetch the amd64
+    # hermetic and run every tool emulated.
     $dir = $PSScriptRoot -replace '\\', '/'
+    $env:LIMEN_INSTALL_ARCH = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment').PROCESSOR_ARCHITECTURE
     Log 'handing off to ./limen-install under git-bash'
     & $BashPath -l -c "cd '$dir' && ./limen-install"
     exit $LASTEXITCODE
