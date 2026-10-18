@@ -9,39 +9,41 @@ test: installer-checksum smoke
 # --- added by limen fix: the recipe the security workflow runs ---
 security: do::security::default
 
-# The installer script pins aqua-installer by version and sha256, and the
-# script refuses itself when the two disagree. The checksum workflow keeps
-# them paired on Renovate's branches, but nothing in CI ever ran the download,
-# so a version bump that left the old sha256 behind was green until a laptop
-# ran it. This downloads the pinned installer and compares.
+# The installer script pins hermetic by version and by the sha256 of its
+# release's checksums.txt, and the script refuses itself when the two
+# disagree. The checksum workflow keeps them paired on Renovate's branches,
+# but nothing in CI would otherwise run the download, so a version bump that
+# left the old sha256 behind would be green until a laptop ran it. This
+# downloads the pinned release's checksums.txt and compares.
 installer-checksum:
     #!/usr/bin/env bash
     set -euo pipefail
-    version=$(sed -n 's/^readonly AQUA_INSTALLER_VERSION="\(.*\)"$/\1/p' limen-install)
-    expected=$(sed -n 's/^readonly AQUA_INSTALLER_SHA256="\(.*\)"$/\1/p' limen-install)
-    [ -n "$version" ] && [ -n "$expected" ] || { echo "limen-install: AQUA_INSTALLER_VERSION or AQUA_INSTALLER_SHA256 not found" >&2; exit 1; }
+    version=$(sed -n 's/^readonly HERMETIC_VERSION="\(.*\)"$/\1/p' limen-install)
+    expected=$(sed -n 's/^readonly HERMETIC_CHECKSUMS_SHA256="\(.*\)"$/\1/p' limen-install)
+    [ -n "$version" ] && [ -n "$expected" ] || { echo "limen-install: HERMETIC_VERSION or HERMETIC_CHECKSUMS_SHA256 not found" >&2; exit 1; }
     scratch=$(mktemp -d "${TMPDIR:-/tmp}/installer-checksum.XXXXXX")
     trap 'rm -rf "$scratch"' EXIT
-    curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o "$scratch/aqua-installer" \
-        "https://raw.githubusercontent.com/aquaproj/aqua-installer/${version}/aqua-installer"
-    actual=$(sha256sum "$scratch/aqua-installer" | cut -d' ' -f1)
+    curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o "$scratch/checksums.txt" \
+        "https://github.com/forkcloser/hermetic/releases/download/${version}/checksums.txt"
+    actual=$(sha256sum "$scratch/checksums.txt" | cut -d' ' -f1)
     if [ "$actual" != "$expected" ]; then
-        echo "aqua-installer ${version} hashes to ${actual}, limen-install pins ${expected}: the pair moved apart" >&2
+        echo "hermetic ${version}'s checksums.txt hashes to ${actual}, limen-install pins ${expected}: the pair moved apart" >&2
         exit 1
     fi
-    echo "aqua-installer ${version}: sha256 matches the pin"
+    echo "hermetic ${version}: checksums.txt matches the pin"
 
 # The installer end to end, in a throwaway HOME with the system's tools and
-# nothing of this machine's: aqua and limen installed, the config written, the
-# rc appended, and on macOS the nightly agent's runner and plist written and
-# valid. Run from that HOME, as a user would, so no project manifest is in
-# reach. On a developer machine LIMEN_INSTALL_NO_LAUNCHD keeps both services
-# out of the machine's launchd domain, where the nightly job would collide
-# with the real one's label and the ssh-agent step would replace the real
-# agent with a throwaway package; on a GitHub runner, thrown away after the
-# job, the knob is off and both services are loaded, checked and booted out:
-# the real path, tested. TMPDIR and the proxy variables pass through: the
-# machine's, not the test's.
+# nothing of this machine's: hermetic and limen installed into the default
+# root under that HOME, the pins written, the rc appended, and on macOS the
+# nightly agent's runner and plist written and valid. Run from that HOME, as
+# a user would, so no project manifest is in reach. On a developer machine
+# LIMEN_INSTALL_NO_LAUNCHD keeps both services out of the machine's launchd
+# domain, where the nightly job would collide with the real one's label and
+# the ssh-agent step would replace the real agent with a throwaway package;
+# on a GitHub runner, thrown away after the job, the knob is off and both
+# services are loaded, checked and booted out: the real path, tested. TMPDIR
+# and the proxy variables pass through: the machine's, not the test's. The
+# token reaches hermetic as HERMETIC_GITHUB_TOKEN, the one it reads.
 [unix]
 smoke:
     #!/usr/bin/env bash
@@ -50,21 +52,28 @@ smoke:
     trap 'rm -rf "$home"' EXIT
     script="$PWD/limen-install"
     (cd "$home" && env -i HOME="$home" USER="${USER:-}" SHELL=/bin/bash PATH=/usr/bin:/bin:/usr/sbin:/sbin TMPDIR="${TMPDIR:-/tmp}" \
-        GITHUB_TOKEN="${GITHUB_TOKEN:-}" AQUA_GITHUB_TOKEN="${AQUA_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}" \
+        GITHUB_TOKEN="${GITHUB_TOKEN:-}" HERMETIC_GITHUB_TOKEN="${HERMETIC_GITHUB_TOKEN:-${AQUA_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}}" \
         HTTP_PROXY="${HTTP_PROXY:-}" HTTPS_PROXY="${HTTPS_PROXY:-}" NO_PROXY="${NO_PROXY:-}" \
         http_proxy="${http_proxy:-}" https_proxy="${https_proxy:-}" no_proxy="${no_proxy:-}" \
         LIMEN_INSTALL_NO_LAUNCHD="$([ -n "${GITHUB_ACTIONS:-}" ] && echo 0 || echo 1)" bash "$script")
-    test -s "$home/.config/aqua/aqua.yaml"
-    grep -q AQUA_GLOBAL_CONFIG "$home/.bashrc"
-    (cd "$home" && AQUA_GLOBAL_CONFIG="$home/.config/aqua/aqua.yaml" AQUA_POLICY_CONFIG="$home/.config/aqua/aqua-policy.yaml" \
-        HOME="$home" PATH="$home/.local/share/aquaproj-aqua/bin:/usr/bin:/bin:/usr/sbin:/sbin" limen version)
     if [ "$(uname -s)" = Darwin ]; then
-        # The macOS toolset resolved by name: aqua ignores a pin it cannot place
-        # (a registry it does not find, a file the tarball lacks) with an error
-        # line and still ends the install, so the run alone proves nothing.
+        root="$home/Library/Application Support/hermetic"
+    else
+        root="$home/.local/share/hermetic"
+    fi
+    test -s "$root/hermetic.yaml"
+    test -s "$root/aqua-checksums.json"
+    test -x "$root/bin/hermetic"
+    grep -qF '/hermetic}/bin' "$home/.bashrc"
+    # The one PATH entry, and limen through the link, from a directory with no
+    # project: the root is the binary's default under this HOME.
+    (cd "$home" && env -i HOME="$home" PATH="$root/bin:/usr/bin:/bin:/usr/sbin:/sbin" limen version)
+    if [ "$(uname -s)" = Darwin ]; then
+        # The macOS toolset resolved by name: a pin that cannot be placed (a
+        # registry not found, a file the tarball lacks) is an error line and
+        # the install still ends, so the run alone proves nothing.
         for tool in ssh-agent-install sshd-install taciturn; do
-            (cd "$home" && AQUA_GLOBAL_CONFIG="$home/.config/aqua/aqua.yaml" AQUA_POLICY_CONFIG="$home/.config/aqua/aqua-policy.yaml" \
-                HOME="$home" PATH="$home/.local/share/aquaproj-aqua/bin:/usr/bin:/bin:/usr/sbin:/sbin" aqua which "$tool" > /dev/null)
+            (cd "$home" && env -i HOME="$home" PATH="$root/bin:/usr/bin:/bin:/usr/sbin:/sbin" hermetic which "$tool" > /dev/null)
         done
         test -x "$home/.local/share/limen-install/nightly"
         plutil -lint "$home/Library/LaunchAgents/world.farcloser.limen-install.plist"
