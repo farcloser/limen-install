@@ -4,8 +4,8 @@ One script to get a machine ready for development.
 
 It installs [hermetic](https://github.com/forkcloser/hermetic), the toolset's own aqua, in
 a root of its own, and through it the machine toolset: [`limen`](https://github.com/farcloser/limen),
-our project scaffolding and verification tool, and on macOS/arm64 the OpenSSH fork and
-taciturn.
+our project scaffolding and verification tool, [`gh`](https://github.com/cli/cli), which
+limen's `github` subcommands run, and on macOS/arm64 the OpenSSH fork and taciturn.
 
 Everything else is per-project, and once a project is scaffolded, can be done through `just`.
 
@@ -54,7 +54,9 @@ step prints the two commands with the path filled in when it meets the refusal.
 
 ## The toolset
 
-The root's pins are the machine toolset: `limen`, and on macOS/arm64
+The root's pins are the machine toolset: `limen`; `gh`, so that `limen github` and the
+update-App steps of `limen bootstrap` run from any directory (inside a project, the
+project's own `gh` pin answers instead); and on macOS/arm64
 [forkcloser/openssh](https://github.com/forkcloser/openssh) — OpenSSH with security keys
 built in (`ssh`, `ssh-agent`, `ssh-add`, `ssh-keygen`, `ssh-keyscan`, `scp`, `sftp`,
 `ssh-agent-install`, `sshd-install`, `sshd-uninstall`) and
