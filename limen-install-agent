@@ -43,6 +43,15 @@
 
 set -euo pipefail
 
+# Every tool this script runs is the system's, for the whole run, as in
+# limen-install: on a machine that has the toolset, head, cp, ln, mkdir, awk
+# and grep on PATH are a checkout's links when run from inside one, and
+# resolve to nothing when run from outside, so the same command line behaves
+# by the current directory. The shell's PATH follows, for hermetic in the
+# root's bin.
+PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+export PATH
+
 log() { printf '› %s\n' "$*"; }
 ok()  { printf '✓ %s\n' "$*"; }
 err() { printf '✗ %s\n' "$*" >&2; }
@@ -248,12 +257,17 @@ pin_github_host_keys() {
 # The sessions' hermetic root: the toolset's pins, copied from the machine's
 # root (hermetic.yaml, registry.yaml, policy.yaml and the checksums limen-install
 # wrote), so a session resolves limen and the fork by name through the same
-# binary, into a store of its own, lazily on first use. No binary of its own:
-# the machine's hermetic on PATH dispatches with HERMETIC_ROOT_DIR from the
-# sessions' settings. Nothing per repository: a session approves a checkout's
-# policy and installs its pins itself, into this root.
+# binary, into a store of its own, lazily on first use. Its bin/hermetic is a
+# symlink to the machine's binary, never a copy: every link hermetic plants in
+# a root's bin points at that root's bin/hermetic and it links nothing into a
+# root that has none, and a copy is the pinned version of the day it was made
+# while the link follows the nightly bump. The recipes' PATH is this bin and the
+# base system, so this is the one hermetic a session's recipes see; it reads
+# HERMETIC_ROOT_DIR from the sessions' settings. Nothing per repository: a
+# session approves a checkout's policy and installs its pins itself, into this
+# root.
 install_agent_root() {
-  mkdir -p "$AGENT_HERMETIC" "$AGENT_HOME" "$AGENT_ROOT/go" "$AGENT_ROOT/go-build" "$AGENT_ROOT/cargo" "$AGENT_ROOT/cache" "$AGENT_ROOT/sigstore" "$AGENT_ROOT/share"
+  mkdir -p "$AGENT_HERMETIC/bin" "$AGENT_HOME" "$AGENT_ROOT/go" "$AGENT_ROOT/go-build" "$AGENT_ROOT/cargo" "$AGENT_ROOT/cache" "$AGENT_ROOT/sigstore" "$AGENT_ROOT/share"
   local machine_root f
   machine_root="$(cd / && "$MACHINE_HERMETIC" root-dir)"
   machine_root="${machine_root%/store}"
@@ -261,7 +275,13 @@ install_agent_root() {
     [ -f "$machine_root/$f" ] || { err "$machine_root/$f is missing — run limen-install first"; exit 1; }
     cp "$machine_root/$f" "$AGENT_HERMETIC/$f"
   done
-  ok "sessions' tool root: $AGENT_ROOT (hermetic $("$MACHINE_HERMETIC" version), pins from $machine_root)"
+  [ -x "$machine_root/bin/hermetic" ] || { err "$machine_root/bin/hermetic is missing — run limen-install first"; exit 1; }
+  # -f replaces a copy an earlier hand or run left; -n keeps ln from following
+  # an existing link (the spelling BSD and GNU ln share; BSD's -h is GNU's
+  # --help).
+  ln -sfn "$machine_root/bin/hermetic" "$AGENT_HERMETIC/bin/hermetic"
+  [ "$(cd / && HERMETIC_ROOT_DIR="$AGENT_HERMETIC" "$AGENT_HERMETIC/bin/hermetic" version)" = "$("$MACHINE_HERMETIC" version)" ] || { err "$AGENT_HERMETIC/bin/hermetic does not run the machine's hermetic"; exit 1; }
+  ok "sessions' tool root: $AGENT_ROOT (hermetic $("$MACHINE_HERMETIC" version) through $AGENT_HERMETIC/bin/hermetic, pins from $machine_root)"
 }
 
 # The sessions' git configuration: one file under the Claude Code home, which a
@@ -496,7 +516,19 @@ verify() {
   case "$greeting" in
     "Hi $BOT_LOGIN!"*) ok "GitHub authenticates the key as $BOT_LOGIN" ;;
     Hi\ *) err "GitHub authenticates the key as a different account: ${greeting%%!*}! — register it on $BOT_LOGIN instead"; exit 1 ;;
-    *) err "GitHub did not authenticate the key: $output"; err "register the public key on $BOT_LOGIN as an authentication key (and as a signing key)"; exit 1 ;;
+    *)
+      # "agent refused operation" is the agent's own answer, before GitHub is
+      # asked anything: the key's peers do not name the client that asked. The
+      # peers are the fork's clients by store path, and the store moves with the
+      # root (an aqua root to hermetic's), so the entries name the old path. The
+      # key's name is the comment taciturn prints with the public key.
+      if printf '%s\n' "$output" | grep -q 'agent refused operation'; then
+        local key_name
+        key_name="$(printf '%s' "$BOT_KEY" | awk '{print $3}')"
+        err "the agent refused to sign with the key: its peers do not name the fork's clients under $FORK_GLOB (the store moved with the root?) — taciturn key peers ${key_name:-<name>} -add 'path=$FORK_GLOB/ssh'; taciturn key peers ${key_name:-<name>} -add 'path=$FORK_GLOB/ssh-keygen'; -remove the entries under the old root once this passes; then re-run"
+        exit 1
+      fi
+      err "GitHub did not authenticate the key: $output"; err "register the public key on $BOT_LOGIN as an authentication key (and as a signing key)"; exit 1 ;;
   esac
 }
 
