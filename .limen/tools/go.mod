@@ -15,8 +15,8 @@ require (
 	github.com/alecthomas/kong v1.16.1 // indirect
 	github.com/containerd/typeurl/v2 v2.3.0 // indirect
 	github.com/fatih/color v1.18.0 // indirect
-	github.com/forkcloser/dot v1.3.0 // indirect
-	github.com/forkcloser/go-graphviz v0.5.1 // indirect
+	github.com/forkcloser/dot v1.3.1 // indirect
+	github.com/forkcloser/go-graphviz v0.5.2 // indirect
 	github.com/forkcloser/godolint v0.5.0 // indirect
 	github.com/hashicorp/go-version v1.6.0 // indirect
 	github.com/lmittmann/tint v1.2.1 // indirect
@@ -30,7 +30,7 @@ require (
 	github.com/sirupsen/logrus v1.10.2 // indirect
 	github.com/tetratelabs/wazero v1.12.0 // indirect
 	github.com/vbatts/git-validation v1.2.2 // indirect
-	golang.org/x/image v0.46.0 // indirect
+	golang.org/x/image v0.47.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
