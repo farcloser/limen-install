@@ -36,8 +36,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: ./.github/actions/setup-aqua
-      - run: aqua install --only-link
+      - uses: ./.github/actions/setup-hermetic
+      - run: hermetic install --only-link
 
       - name: Recompute the sha256 of hermetic's checksums.txt for the pinned version
         run: |
@@ -69,7 +69,7 @@ jobs:
           TOKEN: ${{ steps.app-token.outputs.token || secrets.UPDATE_AQUA_CHECKSUM_TOKEN || github.token }}
         run: |
           # The file this workflow owns, never the whole tree: setup-aqua and
-          # the link step leave .aqua/aqua-checksums.json rewritten on a
+          # the link step leave .hermetic/aqua-checksums.json rewritten on a
           # registry bump, and a whole-tree guard then committed this file
           # unchanged, whose push re-fired the workflow, every thirty seconds.
           git diff --quiet -- limen-install && { echo "installer checksum already in sync"; exit 0; }
