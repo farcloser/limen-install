@@ -446,7 +446,11 @@ for key, wanted in (("allowedDomains", [
          "*.crates.io", "crates.io", "curl.se", "cygwin.com", "discogs.com",
          "*.discogs.com", "dl.google.com", "docs.getutm.app", "docs.renovatebot.com",
          "eclecticlight.co", "farcloser.world", "*.farcloser.world", "forkcloser.org",
-         "*.forkcloser.org", "*.gcr.io", "*.github.com", "github.com",
+         "*.forkcloser.org", "*.gcr.io",
+         # a project-local Homebrew fetches its portable Ruby here, and
+         # `brew style` its gems from rubygems; read-only registries
+         "ghcr.io", "rubygems.org", "*.rubygems.org",
+         "*.github.com", "github.com",
          "*.githubusercontent.com", "go.dev", "*.go.dev", "*.golang.org", "golang.org",
          "golangci-lint.run", "goreleaser.com", "keepachangelog.com",
          "*.keepachangelog.com", "*.kernel.org", "learn.microsoft.com", "lwn.net",
