@@ -248,12 +248,17 @@ pin_github_host_keys() {
 # The sessions' hermetic root: the toolset's pins, copied from the machine's
 # root (hermetic.yaml, registry.yaml, policy.yaml and the checksums limen-install
 # wrote), so a session resolves limen and the fork by name through the same
-# binary, into a store of its own, lazily on first use. No binary of its own:
-# the machine's hermetic on PATH dispatches with HERMETIC_ROOT_DIR from the
-# sessions' settings. Nothing per repository: a session approves a checkout's
-# policy and installs its pins itself, into this root.
+# binary, into a store of its own, lazily on first use. Its bin/hermetic is a
+# symlink to the machine's binary, never a copy: every link hermetic plants in
+# a root's bin points at that root's bin/hermetic and it links nothing into a
+# root that has none, and a copy is the pinned version of the day it was made
+# while the link follows the nightly bump. The recipes' PATH is this bin and the
+# base system, so this is the one hermetic a session's recipes see; it reads
+# HERMETIC_ROOT_DIR from the sessions' settings. Nothing per repository: a
+# session approves a checkout's policy and installs its pins itself, into this
+# root.
 install_agent_root() {
-  mkdir -p "$AGENT_HERMETIC" "$AGENT_HOME" "$AGENT_ROOT/go" "$AGENT_ROOT/go-build" "$AGENT_ROOT/cargo" "$AGENT_ROOT/cache" "$AGENT_ROOT/sigstore" "$AGENT_ROOT/share"
+  mkdir -p "$AGENT_HERMETIC/bin" "$AGENT_HOME" "$AGENT_ROOT/go" "$AGENT_ROOT/go-build" "$AGENT_ROOT/cargo" "$AGENT_ROOT/cache" "$AGENT_ROOT/sigstore" "$AGENT_ROOT/share"
   local machine_root f
   machine_root="$(cd / && "$MACHINE_HERMETIC" root-dir)"
   machine_root="${machine_root%/store}"
@@ -261,7 +266,13 @@ install_agent_root() {
     [ -f "$machine_root/$f" ] || { err "$machine_root/$f is missing — run limen-install first"; exit 1; }
     cp "$machine_root/$f" "$AGENT_HERMETIC/$f"
   done
-  ok "sessions' tool root: $AGENT_ROOT (hermetic $("$MACHINE_HERMETIC" version), pins from $machine_root)"
+  [ -x "$machine_root/bin/hermetic" ] || { err "$machine_root/bin/hermetic is missing — run limen-install first"; exit 1; }
+  # -f replaces a copy an earlier hand or run left; -n keeps ln from following
+  # an existing link (the spelling BSD and GNU ln share; BSD's -h is GNU's
+  # --help).
+  ln -sfn "$machine_root/bin/hermetic" "$AGENT_HERMETIC/bin/hermetic"
+  [ "$(cd / && HERMETIC_ROOT_DIR="$AGENT_HERMETIC" "$AGENT_HERMETIC/bin/hermetic" version)" = "$("$MACHINE_HERMETIC" version)" ] || { err "$AGENT_HERMETIC/bin/hermetic does not run the machine's hermetic"; exit 1; }
+  ok "sessions' tool root: $AGENT_ROOT (hermetic $("$MACHINE_HERMETIC" version) through $AGENT_HERMETIC/bin/hermetic, pins from $machine_root)"
 }
 
 # The sessions' git configuration: one file under the Claude Code home, which a
