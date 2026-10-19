@@ -43,6 +43,15 @@
 
 set -euo pipefail
 
+# Every tool this script runs is the system's, for the whole run, as in
+# limen-install: on a machine that has the toolset, head, cp, ln, mkdir, awk
+# and grep on PATH are a checkout's links when run from inside one, and
+# resolve to nothing when run from outside, so the same command line behaves
+# by the current directory. The shell's PATH follows, for hermetic in the
+# root's bin.
+PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+export PATH
+
 log() { printf '› %s\n' "$*"; }
 ok()  { printf '✓ %s\n' "$*"; }
 err() { printf '✗ %s\n' "$*" >&2; }
