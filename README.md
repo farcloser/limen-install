@@ -45,7 +45,12 @@ any more, the `# aqua` PATH entry, `AQUA_GLOBAL_CONFIG` and `AQUA_POLICY_CONFIG`
 them, and the `aqua.yaml`, `registry.yaml` and `aqua-policy.yaml` under `~/.config/aqua`
 whose header says limen-install wrote them. `~/.local/share/aquaproj-aqua` is your own aqua's
 root now; the toolset's packages in it are dead weight until pruned, harmless. Then run
-`limen-install-agent` again: the sessions' root moves with it.
+`limen-install-agent` again: the sessions' root moves with it. The bot key's peers name the
+fork's `ssh` and `ssh-keygen` by store path, and the store moved with the root, so the agent
+refuses every signature until the new path is a peer: `taciturn key peers <name> -add
+'path=<root>/store/pkgs/github_release/github.com/forkcloser/openssh/*/*/*/bin/ssh'`, the
+same with `ssh-keygen`, then `-remove` the entries under the aqua root; the script's verify
+step prints the two commands with the path filled in when it meets the refusal.
 
 ## The toolset
 

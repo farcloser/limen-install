@@ -507,7 +507,19 @@ verify() {
   case "$greeting" in
     "Hi $BOT_LOGIN!"*) ok "GitHub authenticates the key as $BOT_LOGIN" ;;
     Hi\ *) err "GitHub authenticates the key as a different account: ${greeting%%!*}! — register it on $BOT_LOGIN instead"; exit 1 ;;
-    *) err "GitHub did not authenticate the key: $output"; err "register the public key on $BOT_LOGIN as an authentication key (and as a signing key)"; exit 1 ;;
+    *)
+      # "agent refused operation" is the agent's own answer, before GitHub is
+      # asked anything: the key's peers do not name the client that asked. The
+      # peers are the fork's clients by store path, and the store moves with the
+      # root (an aqua root to hermetic's), so the entries name the old path. The
+      # key's name is the comment taciturn prints with the public key.
+      if printf '%s\n' "$output" | grep -q 'agent refused operation'; then
+        local key_name
+        key_name="$(printf '%s' "$BOT_KEY" | awk '{print $3}')"
+        err "the agent refused to sign with the key: its peers do not name the fork's clients under $FORK_GLOB (the store moved with the root?) — taciturn key peers ${key_name:-<name>} -add 'path=$FORK_GLOB/ssh'; taciturn key peers ${key_name:-<name>} -add 'path=$FORK_GLOB/ssh-keygen'; -remove the entries under the old root once this passes; then re-run"
+        exit 1
+      fi
+      err "GitHub did not authenticate the key: $output"; err "register the public key on $BOT_LOGIN as an authentication key (and as a signing key)"; exit 1 ;;
   esac
 }
 
