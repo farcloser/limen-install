@@ -65,9 +65,11 @@ smoke:
     test -s "$root/aqua-checksums.json"
     test -x "$root/bin/hermetic"
     grep -qF '/hermetic}/bin' "$home/.bashrc"
-    # The one PATH entry, and limen through the link, from a directory with no
-    # project: the root is the binary's default under this HOME.
+    # The one PATH entry, and limen and gh through their links, from a
+    # directory with no project: the root is the binary's default under this
+    # HOME, and a root pin answers where no project's does.
     (cd "$home" && env -i HOME="$home" PATH="$root/bin:/usr/bin:/bin:/usr/sbin:/sbin" limen version)
+    (cd "$home" && env -i HOME="$home" PATH="$root/bin:/usr/bin:/bin:/usr/sbin:/sbin" gh --version > /dev/null)
     if [ "$(uname -s)" = Darwin ]; then
         # The macOS toolset resolved by name: a pin that cannot be placed (a
         # registry not found, a file the tarball lacks) is an error line and

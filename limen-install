@@ -227,10 +227,10 @@ write_config() {
 
   cat > "$ROOT/hermetic.yaml" <<'YAML'
 ---
-# The toolset's pins: limen, the project scaffolder, OpenSSH with security
-# keys built in, and taciturn, the Secure Enclave ssh-agent. hermetic's global
-# config, read from its root. Written by limen-install; edits are overwritten
-# on the next run.
+# The toolset's pins: limen, the project scaffolder, gh, which limen's github
+# subcommands run, OpenSSH with security keys built in, and taciturn, the
+# Secure Enclave ssh-agent. hermetic's global config, read from its root.
+# Written by limen-install; edits are overwritten on the next run.
 checksum:
   enabled: true
   require_checksum: true
@@ -240,6 +240,8 @@ registries:
     path: registry.yaml
 packages:
   - name: farcloser/limen@v0.14.0 # renovate: depName=farcloser/limen
+    registry: farcloser
+  - name: cli/cli@v2.102.0 # renovate: depName=cli/cli
     registry: farcloser
   - name: forkcloser/openssh@v10.6.1.3 # renovate: depName=forkcloser/openssh
     registry: farcloser
@@ -278,6 +280,41 @@ packages:
           - https://github.com/farcloser/limen/.github/workflows/release.yaml@refs/tags/{{.Version}}
           - --certificate-oidc-issuer
           - https://token.actions.githubusercontent.com
+    supported_envs:
+      - darwin
+      - linux
+      - windows
+  # gh, which limen's github subcommands and bootstrap's update-App steps run
+  # from wherever limen is invoked: inside a project the project's own pin
+  # answers, everywhere else this one. The entry is the aqua registry's
+  # current block for cli/cli: zip archives, with macOS in the darwin name
+  # and tar.gz on linux, the binary under a versioned directory and gh.exe at
+  # the archive root on windows; the release ships gh_<version>_checksums.txt
+  # and attests every asset from its deployment workflow.
+  - type: github_release
+    repo_owner: cli
+    repo_name: cli
+    description: GitHub's official command line tool
+    asset: gh_{{trimV .Version}}_{{.OS}}_{{.Arch}}.{{.Format}}
+    format: zip
+    files:
+      - name: gh
+        src: gh_{{trimV .Version}}_{{.OS}}_{{.Arch}}/bin/gh
+    overrides:
+      - goos: linux
+        format: tar.gz
+      - goos: windows
+        files:
+          - name: gh
+            src: bin/gh.exe
+    replacements:
+      darwin: macOS
+    checksum:
+      type: github_release
+      asset: gh_{{trimV .Version}}_checksums.txt
+      algorithm: sha256
+    github_artifact_attestations:
+      signer_workflow: cli/cli/.github/workflows/deployment.yml
     supported_envs:
       - darwin
       - linux
