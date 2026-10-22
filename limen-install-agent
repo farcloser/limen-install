@@ -428,6 +428,28 @@ baseline += ["Read(~/" + l + ")" for l in letters if l[0] not in read_skip] + ["
 baseline += ["Edit(~/" + p + ")" for p in edits]
 baseline += ["Edit(~/" + l + ")" for l in letters if l[0] not in edit_skip] + ["Edit(~/Pi*)", "Edit(~/Pu*)"]
 baseline += ["Edit(./.claude/hooks)", "Edit(./.claude/settings.json)", "Edit(./.claude/settings.local.json)"]
+# No session reads or writes a file outside the allowed locations, and none
+# runs a shell command outside the Bash sandbox. Bash is sandboxed and its
+# escape hatch is off (below); these MCP tools are the other ways a session
+# does either on the host, each denied by name: the desktop app's Terminal
+# panel (a command typed into the human's own shell; reading the panel is
+# not in the list), the whole GoLand server (its terminal, run configurations,
+# external tools, builds and inspection scripts execute on the host, and its
+# file tools read, write and rename through the IDE, outside the sandbox's
+# rules), the iOS simulator's build (xcodebuild runs the project's script
+# phases unsandboxed; the simulator's controls stay, a controlled tool that
+# runs no shell, and the build itself runs from sandboxed Bash), the browser
+# pane's dev server start (a command from launch.json on the host; inspecting
+# its tabs stays), and the desktop app's host actions (a git merge with the
+# human's own identity, worktree deletion, opening an editor or the Finder).
+# A tool a session does not have costs nothing to deny.
+host = ("mcp__terminal__run_in_terminal", "mcp__terminal__open_terminal_tab", "mcp__terminal__stop_terminal_tab",
+        "mcp__goland",
+        "mcp__Claude_Code_iOS_Simulator__build",
+        "mcp__Claude_Browser__preview_start",
+        "mcp__ccd_host__sync_with_base_branch", "mcp__ccd_host__clean_up_worktrees",
+        "mcp__ccd_host__discard_kept_worktree", "mcp__ccd_host__open_in_editor", "mcp__ccd_host__reveal_path")
+baseline += list(host)
 for rule in baseline:
     if rule not in deny:
         deny.append(rule)
