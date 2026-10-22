@@ -195,8 +195,11 @@ What it does (idempotent — re-run to converge):
   baseline is written in full, in `~` form: Read denials on the home's credential
   stores (never the keychain, which gh needs), Edit denials on every dotfile
   letter that holds no sandbox write location, on the launch agents and app data,
-  and on each project's own settings and hooks; Read and Edit rules also become
-  sandbox denials for every command. The sandbox baseline follows: the reviewed
+  and on each project's own settings and hooks, and denials by name on every MCP
+  tool that runs a command or touches files on the host outside the Bash
+  sandbox (the desktop app's Terminal panel, the GoLand server, the iOS
+  simulator's build, the browser pane's dev servers, the app's host actions); Read and Edit rules
+  also become sandbox denials for every command. The sandbox baseline follows: the reviewed
   network allowlist and deny list (added to, never pruned), no mach service, Apple
   events off, the one exclusion (UTM's `utmctl` by absolute path), and the harness
   settings that go with it (transcripts kept a week, no background traffic; bypass
