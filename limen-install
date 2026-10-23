@@ -241,7 +241,7 @@ registries:
 packages:
   - name: farcloser/limen@v0.15.1 # renovate: depName=farcloser/limen
     registry: farcloser
-  - name: cli/cli@v2.102.0 # renovate: depName=cli/cli
+  - name: cli/cli@v2.103.0 # renovate: depName=cli/cli
     registry: farcloser
   - name: forkcloser/openssh@v10.6.1.3 # renovate: depName=forkcloser/openssh
     registry: farcloser
