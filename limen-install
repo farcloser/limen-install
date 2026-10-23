@@ -55,7 +55,7 @@ export PATH
 # checksums.txt, and checksums.txt against this.
 # renovate: depName=forkcloser/hermetic
 readonly HERMETIC_VERSION="v0.2.3"
-readonly HERMETIC_CHECKSUMS_SHA256="da752591bf17d7fc5310c97b3bc47764fd876be387f099bc812c94790aee592a"
+readonly HERMETIC_CHECKSUMS_SHA256="c7eb09712dc3d756bead96ae1286b53de275134d0012601ef37f57ec793f9431"
 
 SHELL_CHANGED=0   # set to 1 if we modify the shell rc (→ advise opening a new shell)
 
