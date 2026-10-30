@@ -359,7 +359,7 @@ if os.environ["SOCKET"] not in (os.path.expanduser(s) for s in sockets):
 # The aqua variables of the previous installer go: hermetic derives the
 # library's from HERMETIC_ROOT_DIR and scrubs every AQUA_* it is given.
 root = os.environ["ROOT"]
-for key in ("AQUA_ROOT_DIR", "AQUA_GLOBAL_CONFIG", "AQUA_POLICY_CONFIG", "HERMETIC_ROOT_DIR", "LIMEN_AGENT_HOME", "GOPATH", "GOMODCACHE", "GOCACHE", "CARGO_HOME", "XDG_CACHE_HOME", "TUF_ROOT", "XDG_DATA_HOME"):
+for key in ("AQUA_ROOT_DIR", "AQUA_GLOBAL_CONFIG", "AQUA_POLICY_CONFIG", "HERMETIC_ROOT_DIR", "LIMEN_AGENT_HOME", "GOPATH", "GOMODCACHE", "GOCACHE", "CARGO_HOME", "XDG_CACHE_HOME", "TUF_ROOT", "XDG_DATA_HOME", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"):
     env.pop(key, None)  # re-added below in a fixed order, so a re-run rewrites nothing
 env.update({
     "HERMETIC_ROOT_DIR": root + "/hermetic",
@@ -375,6 +375,11 @@ env.update({
     # gh keeps its extensions under XDG_DATA_HOME/gh; the sessions install the
     # gh-stack extension there, into their own root, and verify its attestation.
     "XDG_DATA_HOME": root + "/share",
+    # No background traffic from the CLI. Set here, in the one fixed-order
+    # block, and not after it: a key written outside the block lands at the
+    # end on the first run and behind the re-added block on the next, so a
+    # converged file changed bytes.
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
 })
 # The write list: the root, and any --write directories as given; the sandbox
 # always allows a session's own working directory, so none is needed for the
@@ -506,11 +511,11 @@ network["allowLocalBinding"] = True
 sandbox["allowAppleEvents"] = False
 sandbox["enableWeakerNetworkIsolation"] = True
 sandbox["excludedCommands"] = ["/Applications/UTM.app/Contents/MacOS/utmctl *"]
-# The harness: transcripts kept a week (every session can read every other's), no
-# background traffic from the CLI. Bypass mode cannot be refused from here:
-# disableBypassPermissionsMode is honoured in managed settings only (tried 2026-10-12).
+# The harness: transcripts kept a week (every session can read every other's); the
+# CLI's background traffic is off in the env block above. Bypass mode cannot be
+# refused from here: disableBypassPermissionsMode is honoured in managed settings
+# only (tried 2026-10-12).
 settings["cleanupPeriodDays"] = 7
-env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
 # The hand-kept hook that auto-allowed sandboxed commands is retired: the
 # sandbox itself auto-allows them, and its exclusion regex drifted from
 # excludedCommands. The file is left for the human.
