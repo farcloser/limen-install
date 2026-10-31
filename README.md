@@ -151,14 +151,16 @@ What it does (idempotent — re-run to converge):
   for ssh.
 - **farclauder**: `~/.claude/bin/farclauder`, run outside the sandbox through
   `sandbox.excludedCommands`, for what the sandbox's built-in protected paths
-  refuse and no setting unlocks. `farclauder worktree remove <path>` finishes
-  `git worktree remove` for a worktree under a clone's `.claude/worktrees`: git
-  deletes the checkout and fails on the record's `commondir` and the
-  worktree's `.claude` settings; farclauder removes what is left, and refuses a
-  worktree whose checkout is still there. It runs no git. The exclusion matches
-  the call's text, so a session calls it by the absolute path the installer
-  writes, as the whole command: a wrapper, a chain or a redirect stays
-  sandboxed.
+  refuse and no setting unlocks. `farclauder worktree remove <path>` removes a
+  worktree under a clone's `.claude/worktrees`, its checkout and its record in
+  `.git/worktrees`, which `git worktree remove` cannot do from a session: the
+  record's `commondir` and the worktree's `.claude` entries are protected. It
+  is the one call a session makes to remove a worktree it has checked holds no
+  work in progress; it refuses a locked worktree. It runs no git. The
+  exclusion matches the call's text, and names both `~/.claude/bin/farclauder`
+  and its absolute path, so a session runs
+  `~/.claude/bin/farclauder worktree remove <path>` as the whole command: a
+  wrapper, a chain or a redirect stays sandboxed.
 - **Pinned host keys**: `~/.claude/known_hosts`, GitHub's keys from its
   published list — the sandbox is denied `~/.ssh`, and there is no
   trust-on-first-use.
