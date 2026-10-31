@@ -539,7 +539,12 @@ network["allowMachLookup"] = []
 network["allowLocalBinding"] = True
 sandbox["allowAppleEvents"] = False
 sandbox["enableWeakerNetworkIsolation"] = True
-sandbox["excludedCommands"] = ["/Applications/UTM.app/Contents/MacOS/utmctl *"]
+# stapler's validate: Apple's URL loading honours the system proxy only and
+# the sandbox's DNS is reachable through its proxy only, so no sandboxed
+# process reaches Apple's ticket service (limen issue 559). Read-only, and
+# the binary itself rather than the xcrun launcher: what runs unsandboxed is
+# what the name resolves to, and xcrun resolves through xcode-select.
+sandbox["excludedCommands"] = ["/Applications/UTM.app/Contents/MacOS/utmctl *", "/Applications/Xcode.app/Contents/Developer/usr/bin/stapler validate *"]
 # The harness: transcripts kept a week (every session can read every other's); the
 # CLI's background traffic is off in the env block above. Bypass mode cannot be
 # refused from here: disableBypassPermissionsMode is honoured in managed settings
