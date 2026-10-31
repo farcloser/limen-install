@@ -132,6 +132,7 @@ fi
 readonly CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 readonly HELPER="$CLAUDE_HOME/bin/ssh-connect-proxy"
 readonly SIGNER="$CLAUDE_HOME/bin/ssh-keygen-agent"
+readonly FARCLAUDER="$CLAUDE_HOME/bin/farclauder"
 readonly KNOWN_HOSTS="$CLAUDE_HOME/known_hosts"
 readonly GITCONFIG="$CLAUDE_HOME/gitconfig" GITIGNORE="$CLAUDE_HOME/gitignore"
 readonly SETTINGS="$CLAUDE_HOME/settings.json"
@@ -247,6 +248,79 @@ SH
   ok "signing wrapper: $SIGNER"
 }
 
+# farclauder: the commands a session needs that the sandbox's built-in
+# protected paths refuse and no setting unlocks, run outside the sandbox
+# through excludedCommands (merge_settings). It lives in $CLAUDE_HOME/bin,
+# which a session cannot write, so what runs unsandboxed is this file and
+# nothing a session planted. It runs no git: unsandboxed git would read a
+# config or hooks a session can write in another clone, and run them outside
+# the sandbox. `bash -p` ignores BASH_ENV and exported functions from the
+# session's environment, and every tool is called by absolute path.
+install_farclauder() {
+  mkdir -p "$CLAUDE_HOME/bin"
+  cat > "$FARCLAUDER" <<'SH'
+#!/bin/bash -p
+# farclauder worktree remove <path>
+#   Finishes `git worktree remove` for a worktree under a clone's
+#   .claude/worktrees: git deletes the checkout, then fails on the files the
+#   sandbox protects (the record's commondir, the worktree's .claude
+#   settings). Removes the worktree's directory and its record in the clone's
+#   .git/worktrees, and only for a worktree whose checkout is gone (no .git
+#   left), so it never removes a live worktree.
+# Installed by limen-install-agent; runs outside the sandbox.
+set -euo pipefail
+PATH=/usr/bin:/bin
+LC_ALL=C
+export PATH LC_ALL
+unset CDPATH
+
+die() { printf 'farclauder: %s\n' "$*" >&2; exit 1; }
+
+worktree_remove() {
+  [ "$#" -eq 1 ] || die "usage: farclauder worktree remove <path>"
+  local path=$1 name parent repo gitdir
+  case "$path" in /*) ;; *) die "$path: not an absolute path" ;; esac
+  path=${path%/}
+  name=${path##*/}
+  case "$name" in
+    "" | . | .. | *[!A-Za-z0-9._-]*) die "$path: not a worktree name" ;;
+  esac
+  parent=${path%/*}
+  [ "${parent##*/}" = worktrees ] || die "$path: not under .claude/worktrees"
+  [ "$(/usr/bin/basename "${parent%/*}")" = .claude ] || die "$path: not under .claude/worktrees"
+  repo=${parent%/*/*}
+  # Each removal runs from inside the directory it was checked in, on the bare
+  # name: a path rebuilt after the checks could resolve elsewhere by the time
+  # rm runs.
+  cd -P -- "$repo/.git/worktrees" 2>/dev/null || die "$repo: no .git/worktrees"
+  [ "$(pwd -P)" = "$repo/.git/worktrees" ] || die "$repo/.git/worktrees: not a physical directory"
+  [ -d "$name" ] && [ ! -L "$name" ] || die "$repo/.git/worktrees/$name: no such worktree record"
+  [ -f "$name/gitdir" ] && [ ! -L "$name/gitdir" ] || die "$repo/.git/worktrees/$name: no gitdir"
+  gitdir=$(/bin/cat -- "$name/gitdir")
+  [ "$gitdir" = "$path/.git" ] || die "$repo/.git/worktrees/$name records $gitdir, not $path/.git"
+  cd -P -- "$parent" 2>/dev/null || die "$parent: no such directory"
+  [ "$(pwd -P)" = "$parent" ] || die "$parent: not a physical directory"
+  if [ -e "$name" ] || [ -L "$name" ]; then
+    [ -d "$name" ] && [ ! -L "$name" ] || die "$path: not a directory"
+    [ ! -e "$name/.git" ] && [ ! -L "$name/.git" ] || die "$path: the checkout is still there (run git worktree remove first)"
+    /bin/rm -rf -- "$name"
+    printf 'removed %s\n' "$path"
+  fi
+  cd -P -- "$repo/.git/worktrees" 2>/dev/null || die "$repo: no .git/worktrees"
+  [ "$(pwd -P)" = "$repo/.git/worktrees" ] || die "$repo/.git/worktrees: not a physical directory"
+  /bin/rm -rf -- "$name"
+  printf 'removed %s\n' "$repo/.git/worktrees/$name"
+}
+
+case "${1:-} ${2:-}" in
+  "worktree remove") shift 2; worktree_remove "$@" ;;
+  *) die "usage: farclauder worktree remove <path>" ;;
+esac
+SH
+  chmod 755 "$FARCLAUDER"
+  ok "farclauder installed at $FARCLAUDER"
+}
+
 pin_github_host_keys() {
   # GitHub publishes its host keys at api.github.com/meta; pinned here so the
   # sandbox (denied ~/.ssh) verifies the host strictly, never trust-on-first-use.
@@ -352,7 +426,7 @@ merge_settings() {
   mkdir -p "$CLAUDE_HOME"
   [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
   cp "$SETTINGS" "$SETTINGS.bak"
-  SOCKET="$AGENT_SOCKET" GITCONFIG_PATH="$GITCONFIG" \
+  SOCKET="$AGENT_SOCKET" GITCONFIG_PATH="$GITCONFIG" FARCLAUDER="$FARCLAUDER" \
   ROOT="$AGENT_ROOT" WRITE_DIRS="$(printf '%s\n' ${WRITE[@]+"${WRITE[@]}"})" USER_HOME="$HOME" \
   python3 - "$SETTINGS" <<'PY'
 import json, os, string, sys
@@ -544,7 +618,10 @@ sandbox["enableWeakerNetworkIsolation"] = True
 # process reaches Apple's ticket service (limen issue 559). Read-only, and
 # the binary itself rather than the xcrun launcher: what runs unsandboxed is
 # what the name resolves to, and xcrun resolves through xcode-select.
-sandbox["excludedCommands"] = ["/Applications/UTM.app/Contents/MacOS/utmctl *", "/Applications/Xcode.app/Contents/Developer/usr/bin/stapler validate *"]
+# farclauder's worktree removal: the record's commondir and a worktree's
+# .claude settings are protected paths no setting unlocks (install_farclauder).
+sandbox["excludedCommands"] = ["/Applications/UTM.app/Contents/MacOS/utmctl *", "/Applications/Xcode.app/Contents/Developer/usr/bin/stapler validate *",
+                               os.environ["FARCLAUDER"] + " worktree remove *"]
 # The harness: transcripts kept a week (every session can read every other's); the
 # CLI's background traffic is off in the env block above. Bypass mode cannot be
 # refused from here: disableBypassPermissionsMode is honoured in managed settings
@@ -621,6 +698,7 @@ verify() {
 }
 
 install_helper
+install_farclauder
 pin_github_host_keys
 install_gitconfig
 install_session_ssh_config

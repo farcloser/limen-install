@@ -4,7 +4,7 @@ import '.limen/just/main.just'
 
 lint: do::lint::default
 fix: do::fix::default
-test: installer-checksum smoke
+test: installer-checksum smoke farclauder
 
 # --- added by limen fix: the recipe the security workflow runs ---
 security: do::security::default
@@ -100,3 +100,55 @@ smoke:
 [windows]
 smoke:
     @echo "limen-install: the end-to-end run is unix-only (limen-install.ps1 drives git-bash on Windows)"
+
+# farclauder, as limen-install-agent writes it, run against throwaway clones:
+# it removes a worktree whose checkout git has already deleted, with its
+# record, and refuses everything else: a live checkout, a record that names
+# another path, a symlink on the way, a relative path, a name with a slash.
+[unix]
+farclauder:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    scratch=$(mktemp -d "${TMPDIR:-/tmp}/farclauder.XXXXXX")
+    trap 'rm -rf "$scratch"' EXIT
+    scratch=$(cd -P "$scratch" && pwd -P)
+    tool="$scratch/farclauder"
+    sed -n "/^  cat > \"\$FARCLAUDER\" <<'SH'$/,/^SH$/p" limen-install-agent | sed '1d;$d' > "$tool"
+    chmod 755 "$tool"
+    [ -s "$tool" ] || { echo "farclauder: not found in limen-install-agent" >&2; exit 1; }
+    clone() { # clone <repo> <name> [live]: a clone with one registered worktree
+        mkdir -p "$1/.git/worktrees/$2" "$1/.claude/worktrees/$2/.claude"
+        printf '%s\n' "$1/.claude/worktrees/$2/.git" > "$1/.git/worktrees/$2/gitdir"
+        printf '../..\n' > "$1/.git/worktrees/$2/commondir"
+        : > "$1/.claude/worktrees/$2/.claude/settings.json"
+        if [ "${3:-}" = live ]; then printf 'gitdir: %s\n' "$1/.git/worktrees/$2" > "$1/.claude/worktrees/$2/.git"; fi
+    }
+    refuses() { # refuses <why> <args...>
+        local why=$1; shift
+        if "$tool" "$@" 2>/dev/null; then echo "farclauder did not refuse: $why" >&2; exit 1; fi
+        echo "refuses: $why"
+    }
+    r="$scratch/repo"
+    clone "$r" dead
+    "$tool" worktree remove "$r/.claude/worktrees/dead" > /dev/null
+    [ ! -e "$r/.claude/worktrees/dead" ] && [ ! -e "$r/.git/worktrees/dead" ] || { echo "dead worktree not removed" >&2; exit 1; }
+    echo "removes: a worktree whose checkout is gone, and its record"
+    clone "$r" gone && rm -rf "$r/.claude/worktrees/gone"
+    "$tool" worktree remove "$r/.claude/worktrees/gone" > /dev/null
+    [ ! -e "$r/.git/worktrees/gone" ] || { echo "record of a removed worktree left" >&2; exit 1; }
+    echo "removes: the record of a worktree already gone"
+    clone "$r" live live
+    refuses "a live checkout" worktree remove "$r/.claude/worktrees/live"
+    [ -e "$r/.claude/worktrees/live/.git" ] && [ -e "$r/.git/worktrees/live" ] || { echo "live worktree touched" >&2; exit 1; }
+    clone "$r" other && printf '%s\n' "$scratch/elsewhere/.git" > "$r/.git/worktrees/other/gitdir"
+    refuses "a record that names another path" worktree remove "$r/.claude/worktrees/other"
+    mkdir -p "$scratch/real/.claude/worktrees" && clone "$scratch/real" sym && ln -s "$scratch/real" "$scratch/link"
+    refuses "a symlink on the way" worktree remove "$scratch/link/.claude/worktrees/sym"
+    refuses "a relative path" worktree remove repo/.claude/worktrees/dead
+    refuses "a name outside .claude/worktrees" worktree remove "$r/.git/worktrees/live"
+    refuses "no record" worktree remove "$r/.claude/worktrees/none"
+    refuses "another command" worktree delete "$r/.claude/worktrees/dead"
+
+[windows]
+farclauder:
+    @echo "farclauder: macOS only, as limen-install-agent, which installs it"

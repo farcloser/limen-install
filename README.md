@@ -149,6 +149,16 @@ What it does (idempotent — re-run to converge):
   `settings.json` sets it — so the socket has to travel inside what git
   execs: this wrapper for signing, `-o IdentityAgent` in `core.sshCommand`
   for ssh.
+- **farclauder**: `~/.claude/bin/farclauder`, run outside the sandbox through
+  `sandbox.excludedCommands`, for what the sandbox's built-in protected paths
+  refuse and no setting unlocks. `farclauder worktree remove <path>` finishes
+  `git worktree remove` for a worktree under a clone's `.claude/worktrees`: git
+  deletes the checkout and fails on the record's `commondir` and the
+  worktree's `.claude` settings; farclauder removes what is left, and refuses a
+  worktree whose checkout is still there. It runs no git. The exclusion matches
+  the call's text, so a session calls it by the absolute path the installer
+  writes, as the whole command: a wrapper, a chain or a redirect stays
+  sandboxed.
 - **Pinned host keys**: `~/.claude/known_hosts`, GitHub's keys from its
   published list — the sandbox is denied `~/.ssh`, and there is no
   trust-on-first-use.
