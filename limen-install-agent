@@ -261,12 +261,12 @@ install_farclauder() {
   cat > "$FARCLAUDER" <<'SH'
 #!/bin/bash -p
 # farclauder worktree remove <path>
-#   Finishes `git worktree remove` for a worktree under a clone's
-#   .claude/worktrees: git deletes the checkout, then fails on the files the
-#   sandbox protects (the record's commondir, the worktree's .claude
-#   settings). Removes the worktree's directory and its record in the clone's
-#   .git/worktrees, and only for a worktree whose checkout is gone (no .git
-#   left), so it never removes a live worktree.
+#   Removes a worktree under a clone's .claude/worktrees, checkout and record
+#   (.git/worktrees/<name>), what `git worktree remove --force` would, for a
+#   worktree git cannot remove from inside the sandbox: the record's
+#   commondir and the worktree's .claude entries are protected paths. Whether
+#   the worktree holds work in progress is the caller's to check first; a
+#   locked worktree is refused, as git refuses it.
 # Installed by limen-install-agent; runs outside the sandbox.
 set -euo pipefail
 PATH=/usr/bin:/bin
@@ -298,11 +298,11 @@ worktree_remove() {
   [ -f "$name/gitdir" ] && [ ! -L "$name/gitdir" ] || die "$repo/.git/worktrees/$name: no gitdir"
   gitdir=$(/bin/cat -- "$name/gitdir")
   [ "$gitdir" = "$path/.git" ] || die "$repo/.git/worktrees/$name records $gitdir, not $path/.git"
+  [ ! -e "$name/locked" ] || die "$repo/.git/worktrees/$name: locked (git worktree unlock first)"
   cd -P -- "$parent" 2>/dev/null || die "$parent: no such directory"
   [ "$(pwd -P)" = "$parent" ] || die "$parent: not a physical directory"
   if [ -e "$name" ] || [ -L "$name" ]; then
     [ -d "$name" ] && [ ! -L "$name" ] || die "$path: not a directory"
-    [ ! -e "$name/.git" ] && [ ! -L "$name/.git" ] || die "$path: the checkout is still there (run git worktree remove first)"
     /bin/rm -rf -- "$name"
     printf 'removed %s\n' "$path"
   fi
@@ -620,8 +620,13 @@ sandbox["enableWeakerNetworkIsolation"] = True
 # what the name resolves to, and xcrun resolves through xcode-select.
 # farclauder's worktree removal: the record's commondir and a worktree's
 # .claude settings are protected paths no setting unlocks (install_farclauder).
-sandbox["excludedCommands"] = ["/Applications/UTM.app/Contents/MacOS/utmctl *", "/Applications/Xcode.app/Contents/Developer/usr/bin/stapler validate *",
-                               os.environ["FARCLAUDER_PATH"] + " worktree remove *"]
+# The exclusion matches the call's text, so it names farclauder both ways a
+# session can type it: the absolute path and the ~ form, which is the same
+# on every machine and is what AGENTS.md tells sessions to run.
+farclauder = [os.environ["FARCLAUDER_PATH"] + " worktree remove *"]
+if tilde(os.environ["FARCLAUDER_PATH"]) != os.environ["FARCLAUDER_PATH"]:
+    farclauder.append(tilde(os.environ["FARCLAUDER_PATH"]) + " worktree remove *")
+sandbox["excludedCommands"] = ["/Applications/UTM.app/Contents/MacOS/utmctl *", "/Applications/Xcode.app/Contents/Developer/usr/bin/stapler validate *"] + farclauder
 # The harness: transcripts kept a week (every session can read every other's); the
 # CLI's background traffic is off in the env block above. Bypass mode cannot be
 # refused from here: disableBypassPermissionsMode is honoured in managed settings

@@ -102,9 +102,9 @@ smoke:
     @echo "limen-install: the end-to-end run is unix-only (limen-install.ps1 drives git-bash on Windows)"
 
 # farclauder, as limen-install-agent writes it, run against throwaway clones:
-# it removes a worktree whose checkout git has already deleted, with its
-# record, and refuses everything else: a live checkout, a record that names
-# another path, a symlink on the way, a relative path, a name with a slash.
+# it removes a worktree, checkout and record, and refuses everything else: a
+# locked worktree, a record that names another path, a symlink on the way, a
+# relative path, a name outside .claude/worktrees.
 [unix]
 farclauder:
     #!/usr/bin/env bash
@@ -137,9 +137,13 @@ farclauder:
     "$tool" worktree remove "$r/.claude/worktrees/gone" > /dev/null
     [ ! -e "$r/.git/worktrees/gone" ] || { echo "record of a removed worktree left" >&2; exit 1; }
     echo "removes: the record of a worktree already gone"
-    clone "$r" live live
-    refuses "a live checkout" worktree remove "$r/.claude/worktrees/live"
-    [ -e "$r/.claude/worktrees/live/.git" ] && [ -e "$r/.git/worktrees/live" ] || { echo "live worktree touched" >&2; exit 1; }
+    clone "$r" live live && mkdir "$r/.claude/worktrees/live/.claude/.cc-writes" && : > "$r/.claude/worktrees/live/file"
+    "$tool" worktree remove "$r/.claude/worktrees/live" > /dev/null
+    [ ! -e "$r/.claude/worktrees/live" ] && [ ! -e "$r/.git/worktrees/live" ] || { echo "checkout not removed" >&2; exit 1; }
+    echo "removes: a checkout, its .claude entries, and its record, in one call"
+    clone "$r" locked live && : > "$r/.git/worktrees/locked/locked"
+    refuses "a locked worktree" worktree remove "$r/.claude/worktrees/locked"
+    [ -e "$r/.claude/worktrees/locked/.git" ] && [ -e "$r/.git/worktrees/locked" ] || { echo "locked worktree touched" >&2; exit 1; }
     clone "$r" other && printf '%s\n' "$scratch/elsewhere/.git" > "$r/.git/worktrees/other/gitdir"
     refuses "a record that names another path" worktree remove "$r/.claude/worktrees/other"
     mkdir -p "$scratch/real/.claude/worktrees" && clone "$scratch/real" sym && ln -s "$scratch/real" "$scratch/link"
