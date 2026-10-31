@@ -426,7 +426,7 @@ merge_settings() {
   mkdir -p "$CLAUDE_HOME"
   [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
   cp "$SETTINGS" "$SETTINGS.bak"
-  SOCKET="$AGENT_SOCKET" GITCONFIG_PATH="$GITCONFIG" FARCLAUDER="$FARCLAUDER" \
+  SOCKET="$AGENT_SOCKET" GITCONFIG_PATH="$GITCONFIG" FARCLAUDER_PATH="$FARCLAUDER" \
   ROOT="$AGENT_ROOT" WRITE_DIRS="$(printf '%s\n' ${WRITE[@]+"${WRITE[@]}"})" USER_HOME="$HOME" \
   python3 - "$SETTINGS" <<'PY'
 import json, os, string, sys
@@ -621,7 +621,7 @@ sandbox["enableWeakerNetworkIsolation"] = True
 # farclauder's worktree removal: the record's commondir and a worktree's
 # .claude settings are protected paths no setting unlocks (install_farclauder).
 sandbox["excludedCommands"] = ["/Applications/UTM.app/Contents/MacOS/utmctl *", "/Applications/Xcode.app/Contents/Developer/usr/bin/stapler validate *",
-                               os.environ["FARCLAUDER"] + " worktree remove *"]
+                               os.environ["FARCLAUDER_PATH"] + " worktree remove *"]
 # The harness: transcripts kept a week (every session can read every other's); the
 # CLI's background traffic is off in the env block above. Bypass mode cannot be
 # refused from here: disableBypassPermissionsMode is honoured in managed settings
