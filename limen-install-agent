@@ -320,9 +320,6 @@ install_gitconfig() {
   # An empty excludes file: git's default is ~/.config/git/ignore, which the
   # sandbox denies, and it warns on every command otherwise.
   "${g[@]}" core.excludesFile "$GITIGNORE"
-  # Transitional: goes once the fork release with the ssh_config include is
-  # the machine's pin.
-  "${g[@]}" alias.c '!env -u GIT_SSH_COMMAND git'
   # The harness protects every .git/config under a session's root, and a push
   # that sets an upstream writes it; the branch needs no upstream for a PR.
   "${g[@]}" push.autosetupremote false
@@ -441,9 +438,10 @@ fs["allowWrite"] = writes + [tilde(root)] + [p for p in kept if p not in writes 
 # keeps git away from the human's ~/.gitconfig, a symlink into it. A rule on a
 # letter is future-proof: a directory created tomorrow is denied the day it
 # appears. Paths in ~ form, which the rule engine and the sandbox both expand.
-# The force push's allow rule, a prefix match; the `git c` form stays beside
-# it until the alias goes.
+# The force push's allow rule, a prefix match. The `git c` form was the
+# installer's own and goes with the alias.
 allow = settings.setdefault("permissions", {}).setdefault("allow", [])
+allow[:] = [r for r in allow if r != "Bash(git c push --force-with-lease=*)"]
 for rule in ("Bash(git push --force-with-lease=*)",):
     if rule not in allow:
         allow.append(rule)

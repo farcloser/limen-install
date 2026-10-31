@@ -160,8 +160,8 @@ What it does (idempotent — re-run to converge):
   run, readable and not writable by a session like the gh token beside it): name,
   email, signing key, the signing wrapper as `gpg.ssh.program`, `core.sshCommand`
   running the toolset's `ssh` by real path with the agent pinned and the bot key's
-  algorithm as the one accepted (the fork's default list carries no ECDSA), the
-  `git c` alias, an empty excludes file
+  algorithm as the one accepted (the fork's default list carries no ECDSA), an empty
+  excludes file
   (git's default under `~/.config` is denied to sessions), `push.autosetupremote`
   off (the harness protects every `.git/config` under a session's root), and the
   gh credential helper for https reads. With `GIT_CONFIG_GLOBAL` set, a session's
@@ -220,9 +220,7 @@ the bot key's algorithm, the pinned `known_hosts`, strict checking) are
 **the sessions' ssh client options**, `<agent root>/ssh_config`, which the fork's
 `ssh_config` reads first through `Include ${SSH_CONFIG_INCLUDE}`; only the sessions'
 settings `env` sets that variable, so the human's own ssh never reads the file.
-The `git c` alias stays until the fork release carrying that include is the
-machine's pin; it then goes, with the `git c` form of the force-push allow rule
-(`permissions.allow`, written here: `Bash(git push --force-with-lease=*)`).
+The force-push allow rule is written here: `Bash(git push --force-with-lease=*)`.
 
 Remaining, per repository: the bot's line in `.allowed_signers`, so
 `just lint`'s commit check verifies its signatures — the script prints it.
