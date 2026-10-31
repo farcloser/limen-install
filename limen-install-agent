@@ -594,6 +594,25 @@ verify() {
       fi
       err "GitHub did not authenticate the key: $output"; err "register the public key on $BOT_LOGIN as an authentication key (and as a signing key)"; exit 1 ;;
   esac
+  # The same handshake the way a session's plain git makes it: bare `ssh`
+  # through the machine root's link, dispatched into the sessions' root, the
+  # options from the file SSH_CONFIG_INCLUDE names. It proves the sessions'
+  # copy of the fork is a peer of the key and that a session's handshake
+  # succeeds as the bot; the machine's ssh above proves neither.
+  local session_output session_greeting
+  session_output="$(HERMETIC_ROOT_DIR="$AGENT_HERMETIC" SSH_CONFIG_INCLUDE="$SESSION_SSH_CONFIG" "${MACHINE_HERMETIC%/hermetic}/ssh" -o ControlMaster=no -o ControlPath=none -T git@github.com 2>&1 || true)"
+  session_greeting="$(printf '%s\n' "$session_output" | grep -m1 '^Hi ' || true)"
+  case "$session_greeting" in
+    "Hi $BOT_LOGIN!"*) ok "GitHub authenticates the key as $BOT_LOGIN through the sessions' ssh" ;;
+    *)
+      if printf '%s\n' "$session_output" | grep -q 'agent refused operation'; then
+        local key_name
+        key_name="$(printf '%s' "$BOT_KEY" | awk '{print $3}')"
+        err "the agent refused the sessions' ssh: the key's peers do not name the fork's clients under the sessions' root — taciturn key peers ${key_name:-<name>} -add 'path=$AGENT_FORK_GLOB/ssh' -add 'path=$AGENT_FORK_GLOB/ssh-keygen', then re-run"
+        exit 1
+      fi
+      err "the sessions' ssh did not authenticate as $BOT_LOGIN: $session_output"; exit 1 ;;
+  esac
 }
 
 install_helper
