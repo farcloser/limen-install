@@ -4,13 +4,17 @@
 # dedicated bot identity: signed commits, over ssh, from inside its sandbox.
 # Design and reasoning: limen's book/agents.md.
 #
-# One trap this file works around: the Claude Code sandbox rewrites
+# Two traps this file works around. The Claude Code sandbox rewrites
 # SSH_AUTH_SOCK to a launchd socket it then denies, even when settings.json's
 # env block sets it (the rest of that block arrives intact). So the agent's
 # socket travels inside what git execs — `-o IdentityAgent` in core.sshCommand
 # for ssh, a one-line ssh-keygen wrapper for signing (git execs gpg.ssh.program
 # directly; there is no shell in between to prefix an env) — and nothing here
-# depends on the environment variable reaching the session.
+# depends on the environment variable reaching the session. And the sandbox
+# exports GIT_SSH_COMMAND into every command, naming a bare `ssh`, which
+# outranks core.sshCommand: the sessions' ssh options file, which the fork's
+# ssh reads through SSH_CONFIG_INCLUDE, makes that command work as it is
+# (README, "Inside a session").
 #
 # The ssh client and the signer are the fork's, forkcloser/openssh from the
 # machine toolset (security keys and ECDSA built in, the latter since it links
@@ -108,7 +112,8 @@ esac
 readonly FORK_SSH FORK_KEYGEN="$FORK_SSH-keygen" FORK_ADD="$FORK_SSH-add"
 # The fork's two clients as taciturn's peer globs: the store's package
 # directory is version, archive, archive directory, bin, so the version-bearing
-# components are globbed and a pin bump keeps the key's peers.
+# components are globbed and a pin bump keeps the key's peers. One glob per
+# root, never a root as a whole: a binary a session planted elsewhere is no peer.
 readonly FORK_GLOB="${FORK_SSH%/openssh/*}/openssh/*/*/*/bin"
 [ -x "$FORK_KEYGEN" ] && [ -x "$FORK_ADD" ] || { err "no ssh-keygen and ssh-add beside $FORK_SSH"; exit 1; }
 # The bot has one key, and ssh offers a key only when its algorithm is in the
@@ -131,6 +136,8 @@ readonly KNOWN_HOSTS="$CLAUDE_HOME/known_hosts"
 readonly GITCONFIG="$CLAUDE_HOME/gitconfig" GITIGNORE="$CLAUDE_HOME/gitignore"
 readonly SETTINGS="$CLAUDE_HOME/settings.json"
 readonly AGENT_HERMETIC="$AGENT_ROOT/hermetic" AGENT_HOME="$AGENT_ROOT/home"
+readonly SESSION_SSH_CONFIG="$AGENT_ROOT/ssh_config"
+readonly AGENT_FORK_GLOB="$AGENT_HERMETIC/store/pkgs/github_release/github.com/forkcloser/openssh/*/*/*/bin"
 
 install_helper() {
   mkdir -p "$CLAUDE_HOME/bin"
@@ -313,8 +320,8 @@ install_gitconfig() {
   # An empty excludes file: git's default is ~/.config/git/ignore, which the
   # sandbox denies, and it warns on every command otherwise.
   "${g[@]}" core.excludesFile "$GITIGNORE"
-  # `git c push|fetch|pull`: the sandbox exports GIT_SSH_COMMAND, which
-  # outranks core.sshCommand; this alias drops it for one command.
+  # Transitional: goes once the fork release with the ssh_config include is
+  # the machine's pin.
   "${g[@]}" alias.c '!env -u GIT_SSH_COMMAND git'
   # The harness protects every .git/config under a session's root, and a push
   # that sets an upstream writes it; the branch needs no upstream for a PR.
@@ -325,6 +332,23 @@ install_gitconfig() {
   "${g[@]}" --add credential.https://github.com.helper '!gh auth git-credential'
   chmod 0644 "$GITCONFIG" "$GITIGNORE"
   ok "sessions' git configuration: $GITCONFIG"
+}
+
+# No ProxyCommand here: the sandbox's GIT_SSH_COMMAND carries its own. ssh
+# refuses an included file that is group- or world-writable, hence the mode.
+install_session_ssh_config() {
+  mkdir -p "$(dirname "$SESSION_SSH_CONFIG")"
+  cat > "$SESSION_SSH_CONFIG" <<CONF
+# Written by limen-install-agent: a Claude session's ssh client options,
+# included through SSH_CONFIG_INCLUDE. Rewritten whole on every run.
+IdentityAgent "$AGENT_SOCKET"
+IdentitiesOnly no
+PubkeyAcceptedAlgorithms $KEY_ALGO
+UserKnownHostsFile $KNOWN_HOSTS
+StrictHostKeyChecking yes
+CONF
+  chmod 0644 "$SESSION_SSH_CONFIG"
+  ok "sessions' ssh client options: $SESSION_SSH_CONFIG"
 }
 
 merge_settings() {
@@ -359,7 +383,7 @@ if os.environ["SOCKET"] not in (os.path.expanduser(s) for s in sockets):
 # The aqua variables of the previous installer go: hermetic derives the
 # library's from HERMETIC_ROOT_DIR and scrubs every AQUA_* it is given.
 root = os.environ["ROOT"]
-for key in ("AQUA_ROOT_DIR", "AQUA_GLOBAL_CONFIG", "AQUA_POLICY_CONFIG", "HERMETIC_ROOT_DIR", "LIMEN_AGENT_HOME", "GOPATH", "GOMODCACHE", "GOCACHE", "CARGO_HOME", "XDG_CACHE_HOME", "TUF_ROOT", "XDG_DATA_HOME", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"):
+for key in ("AQUA_ROOT_DIR", "AQUA_GLOBAL_CONFIG", "AQUA_POLICY_CONFIG", "HERMETIC_ROOT_DIR", "LIMEN_AGENT_HOME", "GOPATH", "GOMODCACHE", "GOCACHE", "CARGO_HOME", "XDG_CACHE_HOME", "TUF_ROOT", "XDG_DATA_HOME", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "SSH_CONFIG_INCLUDE"):
     env.pop(key, None)  # re-added below in a fixed order, so a re-run rewrites nothing
 env.update({
     "HERMETIC_ROOT_DIR": root + "/hermetic",
@@ -380,6 +404,7 @@ env.update({
     # end on the first run and behind the re-added block on the next, so a
     # converged file changed bytes.
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "SSH_CONFIG_INCLUDE": root + "/ssh_config",
 })
 # The write list: the root, and any --write directories as given; the sandbox
 # always allows a session's own working directory, so none is needed for the
@@ -416,6 +441,12 @@ fs["allowWrite"] = writes + [tilde(root)] + [p for p in kept if p not in writes 
 # keeps git away from the human's ~/.gitconfig, a symlink into it. A rule on a
 # letter is future-proof: a directory created tomorrow is denied the day it
 # appears. Paths in ~ form, which the rule engine and the sandbox both expand.
+# The force push's allow rule, a prefix match; the `git c` form stays beside
+# it until the alias goes.
+allow = settings.setdefault("permissions", {}).setdefault("allow", [])
+for rule in ("Bash(git push --force-with-lease=*)",):
+    if rule not in allow:
+        allow.append(rule)
 deny = settings.setdefault("permissions", {}).setdefault("deny", [])
 reads = (".Trash", ".a*", ".b*", ".claude.json*", ".codex", ".config", ".d*", ".gemini",
          ".gnupg", ".lima", ".netrc", ".o*", ".p*", ".s*", ".z*",
@@ -558,7 +589,7 @@ verify() {
       if printf '%s\n' "$output" | grep -q 'agent refused operation'; then
         local key_name
         key_name="$(printf '%s' "$BOT_KEY" | awk '{print $3}')"
-        err "the agent refused to sign with the key: its peers do not name the fork's clients under $FORK_GLOB (the store moved with the root?) — taciturn key peers ${key_name:-<name>} -add 'path=$FORK_GLOB/ssh'; taciturn key peers ${key_name:-<name>} -add 'path=$FORK_GLOB/ssh-keygen'; -remove the entries under the old root once this passes; then re-run"
+        err "the agent refused to sign with the key: its peers do not name the fork's clients under $FORK_GLOB (the store moved with the root?) — taciturn key peers ${key_name:-<name>} -add 'path=$FORK_GLOB/ssh' -add 'path=$FORK_GLOB/ssh-keygen', and the same under the sessions' root, 'path=$AGENT_FORK_GLOB/ssh' and 'path=$AGENT_FORK_GLOB/ssh-keygen'"
         exit 1
       fi
       err "GitHub did not authenticate the key: $output"; err "register the public key on $BOT_LOGIN as an authentication key (and as a signing key)"; exit 1 ;;
@@ -568,6 +599,7 @@ verify() {
 install_helper
 pin_github_host_keys
 install_gitconfig
+install_session_ssh_config
 install_agent_root
 merge_settings
 if [ "$VERIFY" = 1 ]; then verify; fi

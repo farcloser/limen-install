@@ -49,7 +49,9 @@ root now; the toolset's packages in it are dead weight until pruned, harmless. T
 fork's `ssh` and `ssh-keygen` by store path, and the store moved with the root, so the agent
 refuses every signature until the new path is a peer: `taciturn key peers <name> -add
 'path=<root>/store/pkgs/github_release/github.com/forkcloser/openssh/*/*/*/bin/ssh'`, the
-same with `ssh-keygen`, then `-remove` the entries under the aqua root; the script's verify
+same with `ssh-keygen`, and the same two under the sessions' root
+(`~/.local/share/limen-agent/hermetic/store/pkgs/…`, which a session's bare `ssh` resolves
+to, see below), then `-remove` the entries under the aqua root; the script's verify
 step prints the two commands with the path filled in when it meets the refusal.
 
 ## The toolset
@@ -209,9 +211,18 @@ What it does (idempotent — re-run to converge):
 - **Verification**: the agent serves the key, and GitHub authenticates it as
   the bot.
 
-Inside a session, the agent then uses `git c push` (`git c fetch`, …): the
-sandbox exports a `GIT_SSH_COMMAND` that outranks `core.sshCommand`, and the
-alias drops it for that one command.
+Inside a session, plain `git` is the interface. The sandbox exports a
+`GIT_SSH_COMMAND` into every command, naming a bare `ssh`, and it outranks
+`core.sshCommand`; the rig makes that command work as it is. Bare `ssh` is the
+fork's ssh in the sessions' root, and the bot key's peers name the fork's two
+clients under that root as under the machine's. The client options (the agent,
+the bot key's algorithm, the pinned `known_hosts`, strict checking) are
+**the sessions' ssh client options**, `<agent root>/ssh_config`, which the fork's
+`ssh_config` reads first through `Include ${SSH_CONFIG_INCLUDE}`; only the sessions'
+settings `env` sets that variable, so the human's own ssh never reads the file.
+The `git c` alias stays until the fork release carrying that include is the
+machine's pin; it then goes, with the `git c` form of the force-push allow rule
+(`permissions.allow`, written here: `Bash(git push --force-with-lease=*)`).
 
 Remaining, per repository: the bot's line in `.allowed_signers`, so
 `just lint`'s commit check verifies its signatures — the script prints it.
