@@ -592,13 +592,15 @@ verify() {
       fi
       err "GitHub did not authenticate the key: $output"; err "register the public key on $BOT_LOGIN as an authentication key (and as a signing key)"; exit 1 ;;
   esac
-  # The same handshake the way a session's plain git makes it: bare `ssh`
-  # through the machine root's link, dispatched into the sessions' root, the
-  # options from the file SSH_CONFIG_INCLUDE names. It proves the sessions'
-  # copy of the fork is a peer of the key and that a session's handshake
-  # succeeds as the bot; the machine's ssh above proves neither.
+  # The same handshake through the sessions' copy of the fork, the one a
+  # session's bare `ssh` resolves to (HERMETIC_ROOT_DIR dispatches the machine
+  # root's link into the sessions' root): it proves that copy is a peer of
+  # the key. The options are pinned on the command line as above, where the
+  # human's own ~/.ssh/config, read first and winning on everything it sets,
+  # cannot reach them; that file is denied to a session, so a session needs
+  # no such pinning and its options file does the work.
   local session_output session_greeting
-  session_output="$(HERMETIC_ROOT_DIR="$AGENT_HERMETIC" SSH_CONFIG_INCLUDE="$SESSION_SSH_CONFIG" "${MACHINE_HERMETIC%/hermetic}/ssh" -o ControlMaster=no -o ControlPath=none -T git@github.com 2>&1 || true)"
+  session_output="$(HERMETIC_ROOT_DIR="$AGENT_HERMETIC" "${MACHINE_HERMETIC%/hermetic}/ssh" -o "IdentityAgent=\"$AGENT_SOCKET\"" -o IdentitiesOnly=no -o "PubkeyAcceptedAlgorithms=$KEY_ALGO" -o UserKnownHostsFile="$KNOWN_HOSTS" -o StrictHostKeyChecking=yes -o ControlMaster=no -o ControlPath=none -T git@github.com 2>&1 || true)"
   session_greeting="$(printf '%s\n' "$session_output" | grep -m1 '^Hi ' || true)"
   case "$session_greeting" in
     "Hi $BOT_LOGIN!"*) ok "GitHub authenticates the key as $BOT_LOGIN through the sessions' ssh" ;;
