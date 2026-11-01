@@ -363,7 +363,10 @@ packages:
   # outside its signed bundle, so the binary lives inside it, and the agent
   # itself resolves that path when it installs its LaunchAgent. The v0.1
   # archives had the binary at the root. The release attests the asset and
-  # ships checksums.txt.
+  # ships checksums.txt. From v0.4.0 the release is made by limen's Apple
+  # release lane, a reusable workflow, and the attestation's signer is the
+  # called workflow, not taciturn's own (gh attestation verify's rule for a
+  # reusable workflow); the earlier releases were signed by taciturn's.
   - type: github_release
     repo_owner: forkcloser
     repo_name: taciturn
@@ -374,18 +377,24 @@ packages:
       - name: taciturn
         src: Taciturn.app/Contents/MacOS/taciturn
     # version_overrides is consulted only when the entry itself carries a
-    # version_constraint; without this line every version takes the files above.
-    version_constraint: semver(">= 0.2.0")
+    # version_constraint; without this line every version takes the fields
+    # above. An override sets only the fields it names.
+    version_constraint: semver(">= 0.4.0")
     version_overrides:
+      - version_constraint: semver(">= 0.2.0, < 0.4.0")
+        github_artifact_attestations:
+          signer_workflow: forkcloser/taciturn/.github/workflows/release.yaml
       - version_constraint: semver("< 0.2.0")
         files:
           - name: taciturn
+        github_artifact_attestations:
+          signer_workflow: forkcloser/taciturn/.github/workflows/release.yaml
     checksum:
       type: github_release
       asset: checksums.txt
       algorithm: sha256
     github_artifact_attestations:
-      signer_workflow: forkcloser/taciturn/.github/workflows/release.yaml
+      signer_workflow: farcloser/limen/.github/workflows/limen-release-apple.yaml
     supported_envs:
       - darwin/arm64
 YAML
