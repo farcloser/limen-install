@@ -4,9 +4,11 @@
 # (the canonical update-aqua-checksum is limen-pinned, byte-for-byte, and
 # cannot carry it). Same construction as that workflow: `push:` on the
 # branch prefix, never pull_request_target; no credential kept by the
-# checkout; the commit made through createCommitOnBranch with a one-run App
-# token so GitHub signs it — the `limen:main` ruleset requires signatures,
-# and an unsigned git push made every aqua-installer bump PR unmergeable.
+# checkout; the commit made through createCommitOnBranch with the run's own
+# token, which GitHub signs — the `limen:main` ruleset requires signatures,
+# and an unsigned git push made every aqua-installer bump PR unmergeable —
+# and the pull request's runs on the new head approved with the same token,
+# since a push made with it starts none (book/tooling.md).
 # No loop: the no-change exit ends recursion. Both fix-up workflows fire on
 # renovate/** with disjoint writers; a grouped branch bumping both can
 # collide — the loser fails, and Renovate's next rebase retriggers it.
@@ -32,6 +34,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
+      actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -50,23 +53,11 @@ jobs:
           rm -rf "${tmp}"
           sed -i "s/^readonly HERMETIC_CHECKSUMS_SHA256=\".*\"$/readonly HERMETIC_CHECKSUMS_SHA256=\"${sha}\"/" limen-install
 
-      - name: Mint a push token, if the App is configured
-        # As in the canonical workflow: the minted token lives one hour and is
-        # scoped to this repository; the private key only ever mints. Guarded
-        # on the variable so a repo without the App falls through to the
-        # token chain below.
-        if: vars.UPDATE_AQUA_CHECKSUM_APP_ID != ''
-        id: app-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        with:
-          app-id: ${{ vars.UPDATE_AQUA_CHECKSUM_APP_ID }}
-          private-key: ${{ secrets.UPDATE_AQUA_CHECKSUM_APP_PRIVATE_KEY }}
-          permission-contents: write
-
       - name: Commit the update through the API, if any
+        id: commit
         env:
           BRANCH: ${{ github.ref_name }}
-          TOKEN: ${{ steps.app-token.outputs.token || secrets.UPDATE_AQUA_CHECKSUM_TOKEN || github.token }}
+          TOKEN: ${{ github.token }}
         run: |
           # The file this workflow owns, never the whole tree: setup-aqua and
           # the link step leave .hermetic/aqua-checksums.json rewritten on a
@@ -105,3 +96,28 @@ jobs:
             exit 1
           fi
           echo "pushed ${oid}"
+          echo "oid=${oid}" >> "$GITHUB_OUTPUT"
+
+      # A push made with the run's own token starts no workflow run, so the
+      # pull request's checks on the new head are created awaiting approval
+      # and approved here, as the canonical checksum workflow does.
+      - name: Approve the pull request's runs on the new head
+        if: steps.commit.outputs.oid != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OID: ${{ steps.commit.outputs.oid }}
+        run: |
+          for attempt in $(seq 1 12); do
+            runs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${OID}&per_page=50" \
+              --jq '.workflow_runs[] | select(.status == "action_required" or .conclusion == "action_required") | .id')" || runs=""
+            [ -n "$runs" ] && break
+            sleep 10
+          done
+          if [ -z "$runs" ]; then
+            echo "::error::no run awaiting approval on ${OID} after two minutes: the pull request's checks will not report"
+            exit 1
+          fi
+          for id in $runs; do
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/approve" >/dev/null
+            echo "approved run ${id}"
+          done
