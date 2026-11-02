@@ -100,24 +100,45 @@ jobs:
 
       # A push made with the run's own token starts no workflow run, so the
       # pull request's checks on the new head are created awaiting approval
-      # and approved here, as the canonical checksum workflow does.
+      # and approved here, as the canonical checksum workflow does. The runs
+      # appear one workflow at a time, not together: the loop goes on
+      # approving until thirty seconds pass with none new.
       - name: Approve the pull request's runs on the new head
         if: steps.commit.outputs.oid != ''
         env:
           GH_TOKEN: ${{ github.token }}
           OID: ${{ steps.commit.outputs.oid }}
         run: |
-          for attempt in $(seq 1 12); do
+          # The ids approved are kept: a run just approved can still read
+          # action_required on the next listing, and a second approval fails.
+          approved=""
+          quiet=0
+          for _ in $(seq 1 18); do
             runs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${OID}&per_page=50" \
               --jq '.workflow_runs[] | select(.status == "action_required" or .conclusion == "action_required") | .id')" || runs=""
-            [ -n "$runs" ] && break
+            new=""
+            for id in $runs; do
+              case " ${approved} " in
+                *" ${id} "*) ;;
+                *) new="${new} ${id}" ;;
+              esac
+            done
+            if [ -n "${new}" ]; then
+              for id in ${new}; do
+                gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/approve" >/dev/null
+                echo "approved run ${id}"
+                approved="${approved} ${id}"
+              done
+              quiet=0
+            elif [ -n "${approved}" ]; then
+              quiet=$((quiet + 1))
+              if [ "${quiet}" -ge 3 ]; then
+                break
+              fi
+            fi
             sleep 10
           done
-          if [ -z "$runs" ]; then
-            echo "::error::no run awaiting approval on ${OID} after two minutes: the pull request's checks will not report"
+          if [ -z "${approved}" ]; then
+            echo "::error::no run awaiting approval on ${OID} after three minutes: the pull request's checks will not report"
             exit 1
           fi
-          for id in $runs; do
-            gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/approve" >/dev/null
-            echo "approved run ${id}"
-          done
