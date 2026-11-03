@@ -361,7 +361,7 @@ install_agent_root() {
   # an existing link (the spelling BSD and GNU ln share; BSD's -h is GNU's
   # --help).
   ln -sfn "$machine_root/bin/hermetic" "$AGENT_HERMETIC/bin/hermetic"
-  [ "$(cd / && HERMETIC_ROOT_DIR="$AGENT_HERMETIC" "$AGENT_HERMETIC/bin/hermetic" version)" = "$("$MACHINE_HERMETIC" version)" ] || { err "$AGENT_HERMETIC/bin/hermetic does not run the machine's hermetic"; exit 1; }
+  [ "$AGENT_HERMETIC/bin/hermetic" -ef "$machine_root/bin/hermetic" ] || { err "$AGENT_HERMETIC/bin/hermetic is not the machine's hermetic"; exit 1; }
   ok "sessions' tool root: $AGENT_ROOT (hermetic $("$MACHINE_HERMETIC" version) through $AGENT_HERMETIC/bin/hermetic, pins from $machine_root)"
 }
 
