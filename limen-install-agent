@@ -620,12 +620,9 @@ sandbox["enableWeakerNetworkIsolation"] = True
 # what the name resolves to, and xcrun resolves through xcode-select.
 # farclauder's worktree removal: the record's commondir and a worktree's
 # .claude settings are protected paths no setting unlocks (install_farclauder).
-# The exclusion matches the call's text, so it names farclauder both ways a
-# session can type it: the absolute path and the ~ form, which is the same
-# on every machine and is what AGENTS.md tells sessions to run.
+# The exclusion matches the call's text, by the absolute path, which is what
+# AGENTS.md tells sessions to type: the ~ form ran sandboxed.
 farclauder = [os.environ["FARCLAUDER_PATH"] + " worktree remove *"]
-if tilde(os.environ["FARCLAUDER_PATH"]) != os.environ["FARCLAUDER_PATH"]:
-    farclauder.append(tilde(os.environ["FARCLAUDER_PATH"]) + " worktree remove *")
 sandbox["excludedCommands"] = ["/Applications/UTM.app/Contents/MacOS/utmctl *", "/Applications/Xcode.app/Contents/Developer/usr/bin/stapler validate *"] + farclauder
 # The harness: transcripts kept a week (every session can read every other's); the
 # CLI's background traffic is off in the env block above. Bypass mode cannot be
