@@ -149,7 +149,7 @@ What it does (idempotent — re-run to converge):
   `settings.json` sets it — so the socket has to travel inside what git
   execs: this wrapper for signing, `-o IdentityAgent` in `core.sshCommand`
   for ssh.
-- **farclauder**: `~/.claude/bin/farclauder`, run outside the sandbox through
+- **farclauder**: `/Users/apostasie/.claude/bin/farclauder`, run outside the sandbox through
   `sandbox.excludedCommands`, for what the sandbox's built-in protected paths
   refuse and no setting unlocks. `farclauder worktree remove <path>` removes a
   worktree under a clone's `.claude/worktrees`, its checkout and its record in
@@ -157,10 +157,10 @@ What it does (idempotent — re-run to converge):
   record's `commondir` and the worktree's `.claude` entries are protected. It
   is the one call a session makes to remove a worktree it has checked holds no
   work in progress; it refuses a locked worktree. It runs no git. The
-  exclusion matches the call's text, and names both `~/.claude/bin/farclauder`
-  and its absolute path, so a session runs
-  `~/.claude/bin/farclauder worktree remove <path>` as the whole command: a
-  wrapper, a chain or a redirect stays sandboxed.
+  exclusion matches the call's text and names the absolute path, so a session
+  runs `/Users/apostasie/.claude/bin/farclauder worktree remove <path>` as the
+  whole command: the `~` form, a wrapper, a chain or a redirect stays
+  sandboxed.
 - **Pinned host keys**: `~/.claude/known_hosts`, GitHub's keys from its
   published list — the sandbox is denied `~/.ssh`, and there is no
   trust-on-first-use.
