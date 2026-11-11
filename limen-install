@@ -322,6 +322,10 @@ packages:
   # OpenSSH with security keys built in, relocatable, darwin/arm64 only: the
   # package is skipped elsewhere. The entry is the one forkcloser/openssh's
   # README carries; the release attests every asset and ships checksums.txt.
+  # From v10.6.1.6 the release is made by limen's Apple release lane, a
+  # reusable workflow, and the attestation's signer is the called workflow,
+  # not openssh's own (v10.6.1.5 published nothing); the earlier releases
+  # were signed by openssh's.
   - type: github_release
     repo_owner: forkcloser
     repo_name: openssh
@@ -349,12 +353,20 @@ packages:
         src: openssh_{{trimV .Version}}_{{.OS}}_{{.Arch}}/bin/sshd-install
       - name: sshd-uninstall
         src: openssh_{{trimV .Version}}_{{.OS}}_{{.Arch}}/bin/sshd-uninstall
+    # version_overrides is consulted only when the entry itself carries a
+    # version_constraint; without this line every version takes the fields
+    # above. An override sets only the fields it names.
+    version_constraint: semver(">= 10.6.1.6")
+    version_overrides:
+      - version_constraint: semver("< 10.6.1.6")
+        github_artifact_attestations:
+          signer_workflow: forkcloser/openssh/.github/workflows/release.yaml
     checksum:
       type: github_release
       asset: checksums.txt
       algorithm: sha256
     github_artifact_attestations:
-      signer_workflow: forkcloser/openssh/.github/workflows/release.yaml
+      signer_workflow: farcloser/limen/.github/workflows/limen-release-apple.yaml
     supported_envs:
       - darwin/arm64
   # taciturn, the ssh-agent for Secure Enclave keys the sessions sign and push
