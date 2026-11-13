@@ -140,7 +140,10 @@ install_hermetic() {
   [ -n "$expected" ] || { err "checksums.txt of hermetic ${HERMETIC_VERSION} does not list $asset"; exit 1; }
   verify_sha256 "$t/$asset" "$expected"
   if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-    gh attestation verify "$t/$asset" --repo forkcloser/hermetic >/dev/null 2>&1 \
+    # The signer named, with its ref: --repo alone admits any workflow of
+    # the repository, at any ref.
+    gh attestation verify "$t/$asset" --repo forkcloser/hermetic \
+      --signer-workflow "forkcloser/hermetic/.github/workflows/release.yaml@refs/tags/${HERMETIC_VERSION}" >/dev/null 2>&1 \
       || { err "GitHub attestation of $asset does not verify (gh attestation verify)"; exit 1; }
     ok "hermetic ${HERMETIC_VERSION}: checksum and attestation verified"
   else
