@@ -242,7 +242,7 @@ the bot key's algorithm, the pinned `known_hosts`, strict checking) are
 settings `env` sets that variable, so the human's own ssh never reads the file.
 The force-push allow rule is written here: `Bash(git push --force-with-lease=*)`.
 
-Remaining, per repository: the bot's line in `.allowed_signers`, so
+Remaining, per repository: the bot's line in `.lint-signers`, so
 `just lint`'s commit check verifies its signatures — the script prints it.
 
 ## After bootstrapping
