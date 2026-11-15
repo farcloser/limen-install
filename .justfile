@@ -4,7 +4,7 @@ import '.limen/just/main.just'
 
 lint: do::lint::default
 fix: do::fix::default
-test: installer-checksum smoke pin-write agent-put farclauder merge-settings agent-root
+test: installer-checksum smoke pin-write failure-paths agent-put farclauder merge-settings agent-root
 
 # --- added by limen fix: the recipe the security workflow runs ---
 security: do::security::default
@@ -56,18 +56,47 @@ smoke:
     else
         root="$home/.local/share/hermetic"
     fi
+    installer() {
+        (cd "$home" && env -i HOME="$home" USER="${USER:-}" SHELL=/bin/bash PATH=/usr/bin:/bin:/usr/sbin:/sbin TMPDIR="${TMPDIR:-/tmp}" \
+            GITHUB_TOKEN="${GITHUB_TOKEN:-}" HERMETIC_GITHUB_TOKEN="${HERMETIC_GITHUB_TOKEN:-${AQUA_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}}" \
+            HTTP_PROXY="${HTTP_PROXY:-}" HTTPS_PROXY="${HTTPS_PROXY:-}" NO_PROXY="${NO_PROXY:-}" \
+            http_proxy="${http_proxy:-}" https_proxy="${https_proxy:-}" no_proxy="${no_proxy:-}" \
+            LIMEN_INSTALL_NO_LAUNCHD="$([ -n "${GITHUB_ACTIONS:-}" ] && echo 0 || echo 1)" bash "$script")
+    }
+    # A root another run holds: the script stops before it writes anything,
+    # and names the process and the lock.
+    sleep 60 &
+    holder=$!
+    mkdir -p "$root/.lock" && echo "$holder" > "$root/.lock/pid"
+    if installer > "$home/refused" 2>&1; then
+        echo "limen-install: a run went ahead on a root another process holds" >&2
+        exit 1
+    fi
+    if ! grep -qF "process $holder" "$home/refused" || ! grep -qF "$root/.lock" "$home/refused"; then
+        echo "limen-install: the refusal does not name the holder and its lock:" >&2
+        cat "$home/refused" >&2
+        exit 1
+    fi
+    if [ "$(ls -A "$root")" != .lock ] || [ "$(cat "$root/.lock/pid")" != "$holder" ]; then
+        echo "limen-install: a refused run wrote to the root, or took the holder's lock:" >&2
+        ls -A "$root" >&2
+        exit 1
+    fi
+    kill "$holder" && wait "$holder" 2> /dev/null || true
+    rm -rf "$root/.lock" "$home/refused"
     # The stage a killed run left: the install must end well over it, and
     # leave none (below).
     mkdir -p "$root/.pins" && echo stale > "$root/.pins/stale"
-    (cd "$home" && env -i HOME="$home" USER="${USER:-}" SHELL=/bin/bash PATH=/usr/bin:/bin:/usr/sbin:/sbin TMPDIR="${TMPDIR:-/tmp}" \
-        GITHUB_TOKEN="${GITHUB_TOKEN:-}" HERMETIC_GITHUB_TOKEN="${HERMETIC_GITHUB_TOKEN:-${AQUA_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}}" \
-        HTTP_PROXY="${HTTP_PROXY:-}" HTTPS_PROXY="${HTTPS_PROXY:-}" NO_PROXY="${NO_PROXY:-}" \
-        http_proxy="${http_proxy:-}" https_proxy="${https_proxy:-}" no_proxy="${no_proxy:-}" \
-        LIMEN_INSTALL_NO_LAUNCHD="$([ -n "${GITHUB_ACTIONS:-}" ] && echo 0 || echo 1)" bash "$script")
+    installer
     test -s "$root/hermetic.yaml"
     # The pins are staged, then renamed into place: nothing of either is left.
     if [ -e "$root/.pins" ] || find "$root" -maxdepth 1 \( -name '.*.yaml.*' -o -name '.*.json.*' \) | grep -q .; then
         echo "limen-install: a staged pin file was left in $root" >&2
+        exit 1
+    fi
+    # The run held the root's lock and gave it back.
+    if [ -e "$root/.lock" ]; then
+        echo "limen-install: the root's lock outlives the run" >&2
         exit 1
     fi
     test -s "$root/aqua-checksums.json"
@@ -262,6 +291,154 @@ pin-write:
 [windows]
 pin-write:
     @echo "pin-write: unix only, as the bash harness it runs limen-install's functions in"
+
+# What limen-install does when a run does not go well, or is given a path
+# that is hard to write down: its functions lifted from the script, as
+# merge-settings lifts its own. One run holds a root at a time, and the lock
+# goes with the run however it ends; a download that fails leaves no scratch
+# behind; and a root, a home or a log whose path holds a quote, a dollar, a
+# backtick or an ampersand comes out of the nightly runner, the launchd plist
+# and the shell rc as the same path.
+[unix]
+failure-paths:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    scratch=$(mktemp -d "${TMPDIR:-/tmp}/failure-paths.XXXXXX")
+    trap 'rm -rf "$scratch"' EXIT
+    scratch=$(cd -P "$scratch" && pwd -P)
+    lift() { # lift <function>...: each function's text, from the script
+        for name in "$@"; do
+            sed -n "/^$name() {/,/^}\$/p" limen-install | grep . || { echo "failure-paths: \`$name() {\` not found in limen-install" >&2; exit 1; }
+        done
+    }
+    # The lock. The harness is the script's own cleanup, trap and take_lock,
+    # then whatever the row has the run do while it holds the root.
+    root="$scratch/a root"
+    locked="$scratch/locked"
+    {
+        # shellcheck disable=SC2016 # the harness's own variables, expanded when it runs
+        printf 'set -euo pipefail\nerr() { printf "%%s\\n" "$*" >&2; }\nROOT=%q\nLOCK="$ROOT/.lock"\n' "$root"
+        sed -n '/^SCRATCH=()$/p; /^LOCK_HELD=0$/p; /^trap cleanup EXIT$/p' limen-install
+        lift cleanup take_lock
+        # shellcheck disable=SC2016 # the harness's own argument
+        printf '%s\n' 'take_lock' 'eval "$1"'
+    } > "$locked"
+    for line in 'SCRATCH=()' 'LOCK_HELD=0' 'trap cleanup EXIT'; do
+        grep -qxF -- "$line" "$locked" || { echo "failure-paths: \`$line\` not found in limen-install" >&2; exit 1; }
+    done
+    # shellcheck disable=SC2016 # the harness's own variables
+    held=$(bash "$locked" 'printf "%s %s" "$(cat "$LOCK/pid")" "$$"')
+    [ "${held% *}" = "${held#* }" ] || { echo "failure-paths: the lock names process ${held% *}, the run is ${held#* }" >&2; exit 1; }
+    [ ! -e "$root/.lock" ] || { echo "failure-paths: the lock outlives a run that ended well" >&2; exit 1; }
+    bash "$locked" 'exit 3' || true
+    [ ! -e "$root/.lock" ] || { echo "failure-paths: the lock outlives a run that failed" >&2; exit 1; }
+    echo "locks: a free root, for the run's own process, and gives it back however the run ends"
+    sleep 30 &
+    holder=$!
+    mkdir "$root/.lock" && echo "$holder" > "$root/.lock/pid"
+    if bash "$locked" 'echo ran' > "$scratch/out" 2> "$scratch/err"; then
+        echo "failure-paths: a second run went ahead on a root another holds" >&2
+        exit 1
+    fi
+    if ! grep -qF "process $holder" "$scratch/err" || ! grep -qF "$root/.lock" "$scratch/err"; then
+        echo "failure-paths: the refusal does not name the holder and its lock:" >&2
+        cat "$scratch/err" >&2
+        exit 1
+    fi
+    [ ! -s "$scratch/out" ] && [ "$(cat "$root/.lock/pid")" = "$holder" ] || { echo "failure-paths: a refused run ran, or took the holder's lock away" >&2; exit 1; }
+    echo "refuses: a root another run holds, and leaves that run its lock"
+    kill "$holder" && wait "$holder" 2> /dev/null || true
+    [ "$(bash "$locked" 'echo ran')" = ran ] || { echo "failure-paths: a lock whose holder is gone was not taken over" >&2; exit 1; }
+    mkdir "$root/.lock"
+    [ "$(bash "$locked" 'echo ran')" = ran ] || { echo "failure-paths: a lock with no process in it was not taken over" >&2; exit 1; }
+    [ ! -e "$root/.lock" ] || { echo "failure-paths: the lock outlives the run that took it over" >&2; exit 1; }
+    echo "takes over: a lock whose holder is gone, and one that names nobody"
+    # The other run between making its lock and writing its process id into
+    # it: the lock names nobody yet, and does within the second.
+    sleep 30 &
+    holder=$!
+    mkdir "$root/.lock"
+    (sleep 0.3; echo "$holder" > "$root/.lock/pid") &
+    if bash "$locked" 'echo ran' > "$scratch/out" 2> "$scratch/err"; then
+        echo "failure-paths: a lock whose holder had not written its process id yet was taken" >&2
+        exit 1
+    fi
+    wait $! 2> /dev/null || true
+    if ! grep -qF "process $holder" "$scratch/err" || [ "$(cat "$root/.lock/pid")" != "$holder" ]; then
+        echo "failure-paths: the run did not wait for the holder's process id:" >&2
+        cat "$scratch/err" >&2
+        exit 1
+    fi
+    kill "$holder" && wait "$holder" 2> /dev/null || true
+    rm -rf "$root/.lock"
+    echo "waits: for a holder that has made its lock and not yet signed it"
+    # A download that fails: install_hermetic with a curl that does not
+    # answer, and the scratch directory it made under TMPDIR.
+    failing="$scratch/failing"
+    mkdir "$scratch/tmp"
+    {
+        # shellcheck disable=SC2016 # the harness's own variables, expanded when it runs
+        printf 'set -euo pipefail\nlog() { :; }\nok() { :; }\nerr() { :; }\nROOT=%q\nLOCK="$ROOT/.lock"\nTMPDIR=%q\n' "$root" "$scratch/tmp"
+        # shellcheck disable=SC2016 # the harness's own variables, expanded when it runs
+        printf 'HERMETIC_VERSION=v0.0.0\nHERMETIC_CHECKSUMS_SHA256=0\nhermetic_bin() { echo "$ROOT/bin/hermetic"; }\nhermetic_asset() { echo asset.tar.gz; }\ncurl() { return 22; }\n'
+        sed -n '/^SCRATCH=()$/p; /^LOCK_HELD=0$/p; /^trap cleanup EXIT$/p' limen-install
+        lift cleanup verify_sha256 install_hermetic
+        printf 'install_hermetic\n'
+    } > "$failing"
+    if bash "$failing"; then
+        echo "failure-paths: install_hermetic ended well with no download" >&2
+        exit 1
+    fi
+    [ -z "$(ls -A "$scratch/tmp")" ] || { echo "failure-paths: a failed download left its scratch behind:" >&2; ls -A "$scratch/tmp" >&2; exit 1; }
+    echo "leaves nothing: the scratch of a download that failed"
+    # Paths that are hard to write down, through the three texts the script
+    # writes them into.
+    hard="$scratch/it's \$HOME \`id\` \"q\" & <x>"
+    home="$hard/home"
+    mkdir -p "$home"
+    paths="$scratch/paths"
+    {
+        printf 'set -euo pipefail\nlog() { :; }\nok() { :; }\nerr() { :; }\nis_macos() { true; }\nSCRATCH=()\nSHELL_CHANGED=0\nLAUNCHD_FAILED=0\n'
+        printf 'HOME=%q\nSHELL=/bin/bash\nLIMEN_INSTALL_NO_LAUNCHD=1\nROOT_EXPR=unused\nHERMETIC_ROOT_DIR_PRESET=%q\n' "$home" "$hard/root"
+        printf 'NIGHTLY_LABEL=world.example.test\nNIGHTLY_HOUR=4\nNIGHTLY_MINUTE=17\nNIGHTLY_RUNNER=%q\nNIGHTLY_LAST=%q\nNIGHTLY_PLIST=%q\nNIGHTLY_LOG=%q\n' \
+            "$hard/data/nightly" "$hard/data/last-release" "$hard/agents/job.plist" "$hard/logs/job.log"
+        lift sh_quote xml_escape shell_rc ensure_shell_config
+        # install_nightly holds the runner's text, whose own functions close
+        # in column 0: it is lifted to the script's first call, which follows it.
+        sed -n '/^install_nightly() {$/,/^preflight_writes$/p' limen-install | sed '$d' | grep . || { echo "failure-paths: \`install_nightly() {\` not found in limen-install" >&2; exit 1; }
+        printf 'ensure_shell_config\nensure_shell_config\ninstall_nightly\n'
+    } > "$paths"
+    bash "$paths"
+    sh -n "$hard/data/nightly"
+    # The runner's three assignments, run by sh as the runner runs them.
+    {
+        grep -E '^(log|last)=|^export HERMETIC_ROOT_DIR=' "$hard/data/nightly"
+        # shellcheck disable=SC2016 # the runner's own variables
+        printf '%s\n' 'printf "%s\n%s\n%s\n" "$log" "$last" "$HERMETIC_ROOT_DIR"'
+    } > "$scratch/assignments"
+    printf '%s\n%s\n%s\n' "$hard/logs/job.log" "$hard/data/last-release" "$hard/root" > "$scratch/want"
+    sh "$scratch/assignments" > "$scratch/got" || { echo "failure-paths: the runner's assignments do not run:" >&2; cat "$scratch/assignments" >&2; exit 1; }
+    cmp -s "$scratch/got" "$scratch/want" || { echo "failure-paths: the runner reads other paths than it was given:" >&2; diff "$scratch/want" "$scratch/got" >&2 || true; exit 1; }
+    echo "writes down: a hard path into the nightly runner"
+    python3 -I - "$hard/agents/job.plist" "$hard/data/nightly" "$hard/logs/job.log" <<'PY'
+    import plistlib, sys
+    with open(sys.argv[1], "rb") as f:
+        job = plistlib.load(f)
+    got = (job["ProgramArguments"][1], job["StandardOutPath"], job["StandardErrorPath"])
+    want = (sys.argv[2], sys.argv[3], sys.argv[3])
+    if got != want:
+        sys.exit(f"failure-paths: the plist reads {got}, want {want}")
+    PY
+    echo "writes down: a hard path into the launchd plist"
+    # shellcheck disable=SC2016 # the new shell's own variables
+    first=$(env -i HOME="$home" PATH=/usr/bin:/bin bash -c '. "$HOME/.bashrc"; printf "%s" "${PATH%%:*}"')
+    [ "$first" = "$hard/root/bin" ] || { echo "failure-paths: a shell that reads the rc has \`$first\` first on PATH, want \`$hard/root/bin\`" >&2; exit 1; }
+    [ "$(grep -c '^# hermetic$' "$home/.bashrc")" = 1 ] || { echo "failure-paths: a second run wrote the rc line again" >&2; exit 1; }
+    echo "writes down: a hard path into the shell rc, once"
+
+[windows]
+failure-paths:
+    @echo "failure-paths: unix only, as the bash harness it runs limen-install's functions in"
 
 # `put`, as limen-install-agent writes every file a session reads or runs:
 # the function lifted from the script. A hard link to the old file keeps the
