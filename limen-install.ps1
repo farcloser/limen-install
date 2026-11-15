@@ -37,7 +37,7 @@ $ProgressPreference = 'SilentlyContinue'
 # change with it: update-installer-checksum.yaml recomputes them on Renovate's
 # branch, so the five always move together.
 # renovate: depName=git-for-windows/git
-$GitTag = 'v2.55.0.windows.2'
+$GitTag = 'v2.56.1.windows.1'
 $GitSha256 = @{
     'Git-64-bit.exe'            = '74300da8dfe0d844c5449ffb809662f8eeac47916f83730c879c4084890c6c0e'
     'Git-arm64.exe'             = '3df091fc297001ea9592554ee630111ea27b2d33b137859d08c4971abb319a7c'
