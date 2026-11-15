@@ -76,6 +76,11 @@ NIGHTLY_RUNNER="${XDG_DATA_HOME:-$HOME/.local/share}/limen-install/nightly"
 readonly NIGHTLY_RUNNER
 # The release the nightly job last ran, kept beside its runner.
 readonly NIGHTLY_LAST="${NIGHTLY_RUNNER%/*}/last-release"
+# How the nightly job's last run ended, one line the runner writes however it
+# ends: the time in seconds, the time as a date, the release, the exit code.
+readonly NIGHTLY_ENDED="${NIGHTLY_RUNNER%/*}/last-run"
+# A nightly run older than this many days is one that has stopped running.
+readonly NIGHTLY_STALE_DAYS=2
 readonly NIGHTLY_PLIST="$HOME/Library/LaunchAgents/$NIGHTLY_LABEL.plist"
 readonly NIGHTLY_LOG="$HOME/Library/Logs/limen-install.log"
 LAUNCHD_FAILED=0  # set to 1 when a service could not be loaded (→ exit 1 at the end)
@@ -302,15 +307,20 @@ put() {  # $1=target, the content on stdin
 
 # The next pins, staged: nothing in the root changes here. A stage a killed
 # run left is the first thing removed.
-#
-# Renovate bumps the pins below, grouped with aqua.yaml's — do not hand-edit
-# them out of step.
-write_config() {
+stage_pins() {
   mkdir -p "$ROOT"
   rm -rf "$STAGE"
   mkdir "$STAGE"
+  write_config "$STAGE"
+}
 
-  cat > "$STAGE/hermetic.yaml" <<'YAML'
+# This script's pins, written to a directory: the stage of a run, or the
+# scratch --status compares the root with.
+#
+# Renovate bumps the pins below, grouped with aqua.yaml's — do not hand-edit
+# them out of step.
+write_config() {  # $1=directory
+  cat > "$1/hermetic.yaml" <<'YAML'
 ---
 # The toolset's pins: limen, the project scaffolder, gh, which limen's github
 # subcommands run, OpenSSH with security keys built in, and taciturn, the
@@ -337,7 +347,7 @@ YAML
   # The registry entry mirrors what goreleaser publishes: per-platform tar.gz
   # archives named limen_<version>_<os>_<arch>.tar.gz plus a checksums.txt that
   # the checksums are pinned from (see update-checksum below).
-  cat > "$STAGE/registry.yaml" <<'YAML'
+  cat > "$1/registry.yaml" <<'YAML'
 ---
 # Written by limen-install; edits are overwritten on the next run.
 packages:
@@ -498,7 +508,7 @@ YAML
 
   # Not under its own name: hermetic takes a policy.yaml beside the config it
   # is given for a project's policy, to be allowed before it counts.
-  cat > "$STAGE/root-policy.yaml" <<'YAML'
+  cat > "$1/root-policy.yaml" <<'YAML'
 ---
 # Written by limen-install; edits are overwritten on the next run.
 registries:
@@ -672,11 +682,12 @@ install_nightly() {
 
   # A preset root travels into the runner, since launchd sources no rc; the
   # default root is the binary's own and needs no variable.
-  local root_export="" log_word last_word
+  local root_export="" log_word last_word ended_word
   if [ -n "$HERMETIC_ROOT_DIR_PRESET" ]; then
     root_export="export HERMETIC_ROOT_DIR=$(sh_quote "$HERMETIC_ROOT_DIR_PRESET")"
   fi
   log_word="$(sh_quote "$NIGHTLY_LOG")"
+  ended_word="$(sh_quote "$NIGHTLY_ENDED")"
   last_word="$(sh_quote "$NIGHTLY_LAST")"
 
   # Written beside and moved into place: the nightly run is this very runner,
@@ -694,6 +705,12 @@ install_nightly() {
 set -eu
 PATH=/usr/bin:/bin:/usr/sbin:/sbin
 export PATH
+# How this run ends is written down however it ends, for limen-install
+# --status: nobody reads a log that says nothing went wrong.
+ended=$ended_word
+tag=-
+t=
+trap 'code=\$?; [ -z "\$t" ] || rm -rf "\$t"; printf "%s %s %s %s\n" "\$(date +%s)" "\$(date -u +%Y-%m-%dT%H:%M:%SZ)" "\$tag" "\$code" > "\$ended.new" && mv -f "\$ended.new" "\$ended"' EXIT
 # The log is launchd's open file: trimmed in place, never replaced.
 log=$log_word
 if [ -f "\$log" ] && [ "\$(wc -c < "\$log")" -gt 1048576 ]; then
@@ -734,7 +751,6 @@ accept() {
 }
 accept "\$tag" "\$last" || exit 1
 t=\$(mktemp -d "\${TMPDIR:-/tmp}/limen-install.XXXXXX")
-trap 'rm -rf "\$t"' EXIT
 # The tag by its full name: a branch may carry a release's name, and takes
 # no admin to push.
 curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 20 --max-time 120 \
@@ -813,11 +829,89 @@ PLIST
   fi
 }
 
+# limen-install --status: whether this machine is where this script would put
+# it, and how the nightly job's last run ended. Reads, writes nothing in the
+# root, and ends 1 when there is something to look at.
+status() {
+  local bad=0 scratch f theirs epoch when tag code days
+  log "root: $ROOT"
+  scratch="$(mktemp -d "${TMPDIR:-/tmp}/limen-install.XXXXXX")"
+  SCRATCH+=("$scratch")
+  write_config "$scratch"
+  if [ ! -f "$ROOT/hermetic.yaml" ]; then
+    err "pins: no toolset in this root — run limen-install"
+    bad=1
+  else
+    for f in hermetic.yaml registry.yaml root-policy.yaml; do
+      theirs="$ROOT/${f#root-}"
+      if ! cmp -s "$scratch/$f" "$theirs"; then
+        err "pins: $theirs is not what this script writes: the root is behind it, or ahead of this copy of it"
+        bad=1
+      fi
+    done
+    [ "$bad" = 1 ] || ok "pins: the root holds this script's"
+  fi
+  if ! is_macos; then
+    log "nightly job: none on this platform; the root moves when this script is run"
+    return "$bad"
+  fi
+  if [ "${LIMEN_INSTALL_NO_LAUNCHD:-}" = 1 ]; then
+    log "nightly job: LIMEN_INSTALL_NO_LAUNCHD is set; launchd is not asked"
+  elif launchctl print "gui/$(id -u)/$NIGHTLY_LABEL" >/dev/null 2>&1; then
+    ok "nightly job: $NIGHTLY_LABEL is loaded"
+  else
+    err "nightly job: $NIGHTLY_LABEL is not loaded — from a logged-in terminal, run limen-install"
+    bad=1
+  fi
+  if [ ! -f "$NIGHTLY_ENDED" ]; then
+    # No record is not good news for ever: a job that never gets as far as
+    # its runner writes none. The runner's own date is when it was last
+    # installed, and every run that ends well rewrites it.
+    if [ -n "$(find "$NIGHTLY_RUNNER" -mtime "+$((NIGHTLY_STALE_DAYS - 1))" 2>/dev/null)" ]; then
+      err "last nightly run: none recorded, and the job was installed $NIGHTLY_STALE_DAYS days ago or more — it is not running"
+      bad=1
+    else
+      log "last nightly run: none recorded yet"
+    fi
+    return "$bad"
+  fi
+  read -r epoch when tag code < "$NIGHTLY_ENDED" || true
+  case "$epoch$code" in
+    ''|*[!0-9]*)
+      err "last nightly run: $NIGHTLY_ENDED does not read as a run's end"
+      return 1
+      ;;
+  esac
+  if [ "$code" = 0 ]; then
+    ok "last nightly run: $when, $tag, ended well"
+  else
+    err "last nightly run: $when, $tag, failed (exit $code) — see $NIGHTLY_LOG"
+    bad=1
+  fi
+  days=$(( ($(date +%s) - epoch) / 86400 ))
+  if [ "$days" -ge "$NIGHTLY_STALE_DAYS" ]; then
+    err "last nightly run: $days days ago — the job has stopped running"
+    bad=1
+  fi
+  return "$bad"
+}
+
+case "${1:-}" in
+  "") ;;
+  --status)
+    if status; then exit 0; else exit 1; fi
+    ;;
+  *)
+    err "unknown argument: $1 (the script takes none, or --status)"
+    exit 2
+    ;;
+esac
+
 preflight_writes
 take_lock
 install_hermetic
 ensure_shell_config
-write_config
+stage_pins
 install_tools
 refresh_ssh_agent
 refresh_sshd

@@ -61,8 +61,20 @@ smoke:
             GITHUB_TOKEN="${GITHUB_TOKEN:-}" HERMETIC_GITHUB_TOKEN="${HERMETIC_GITHUB_TOKEN:-${AQUA_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}}" \
             HTTP_PROXY="${HTTP_PROXY:-}" HTTPS_PROXY="${HTTPS_PROXY:-}" NO_PROXY="${NO_PROXY:-}" \
             http_proxy="${http_proxy:-}" https_proxy="${https_proxy:-}" no_proxy="${no_proxy:-}" \
-            LIMEN_INSTALL_NO_LAUNCHD="$([ -n "${GITHUB_ACTIONS:-}" ] && echo 0 || echo 1)" bash "$script")
+            LIMEN_INSTALL_NO_LAUNCHD="$([ -n "${GITHUB_ACTIONS:-}" ] && echo 0 || echo 1)" bash "$script" "$@")
     }
+    says() { # says <exit> <text>: --status ends that way and says that
+        code=0
+        installer --status > "$home/status" 2>&1 || code=$?
+        if [ "$code" != "$1" ] || ! grep -qF -- "$2" "$home/status"; then
+            echo "limen-install: --status ended $code, want $1 and \`$2\`:" >&2
+            cat "$home/status" >&2
+            exit 1
+        fi
+    }
+    # --status on a machine the script never ran on: said, and nothing made.
+    says 1 'no toolset in this root'
+    [ ! -e "$root" ] || { echo "limen-install: --status made $root" >&2; exit 1; }
     # A root another run holds: the script stops before it writes anything,
     # and names the process and the lock.
     sleep 60 &
@@ -101,6 +113,62 @@ smoke:
     fi
     test -s "$root/aqua-checksums.json"
     test -x "$root/bin/hermetic"
+    # --status on the root the install just made: it holds this script's
+    # pins, a moved file is named, and the report writes nothing.
+    before=$(find "$root" -maxdepth 1 | sort)
+    says 0 "pins: the root holds this script's"
+    for f in hermetic.yaml registry.yaml policy.yaml; do
+        cp "$root/$f" "$home/kept"
+        echo '# moved' >> "$root/$f"
+        says 1 "$root/$f is not what this script writes"
+        cp "$home/kept" "$root/$f"
+    done
+    code=0
+    installer --bogus > "$home/status" 2>&1 || code=$?
+    [ "$code" = 2 ] || { echo "limen-install: an unknown argument ended $code, want 2" >&2; exit 1; }
+    [ "$(find "$root" -maxdepth 1 | sort)" = "$before" ] || { echo "limen-install: --status or a refused argument changed the root" >&2; exit 1; }
+    if [ "$(uname -s)" = Darwin ]; then
+        # How the nightly job's last run ended, as its runner writes it.
+        ended="$home/.local/share/limen-install/last-run"
+        says 0 'last nightly run: none recorded yet'
+        echo "$(date +%s) 2026-01-01T00:00:00Z v9.9.9 0" > "$ended"
+        says 0 'last nightly run: 2026-01-01T00:00:00Z, v9.9.9, ended well'
+        echo "$(date +%s) 2026-01-01T00:00:00Z v9.9.9 142" > "$ended"
+        says 1 "failed (exit 142) — see $home/Library/Logs/limen-install.log"
+        # Two days is the limit, to the minute on either side of it.
+        echo "$(($(date +%s) - 2 * 86400 + 600)) 2026-01-01T00:00:00Z v9.9.9 0" > "$ended"
+        says 0 'last nightly run: 2026-01-01T00:00:00Z, v9.9.9, ended well'
+        echo "$(($(date +%s) - 2 * 86400 - 60)) 2026-01-01T00:00:00Z v9.9.9 0" > "$ended"
+        says 1 'last nightly run: 2 days ago'
+        echo 'not a record' > "$ended"
+        says 1 'does not read as a run'
+        rm "$ended"
+        # No record, and a runner that has been there three days: the job
+        # never got as far as writing one.
+        python3 -I -c 'import os, sys, time; then = time.time() - 3 * 86400; os.utime(sys.argv[1], (then, then))' "$home/.local/share/limen-install/nightly"
+        says 1 'none recorded, and the job was installed 2 days ago or more'
+        touch "$home/.local/share/limen-install/nightly"
+        # A night whose latest release cannot be fetched: the runner's own
+        # lines from its first to the one that reads the release, with a curl
+        # that does not answer. The run ends as curl did, and says so.
+        {
+            printf '%s\n' 'curl() { return 22; }'
+            # shellcheck disable=SC2016 # the runner's own line, as it is written
+            sed -n '1,/^tag=\${url##\*\/}$/p' "$home/.local/share/limen-install/nightly"
+        } > "$home/unfetched"
+        # shellcheck disable=SC2016 # the runner's own line, looked for as it is written
+        grep -qxF 'tag=${url##*/}' "$home/unfetched" || { echo "limen-install: the line that reads the release was not found in the nightly runner" >&2; exit 1; }
+        code=0
+        sh "$home/unfetched" > /dev/null 2>&1 || code=$?
+        if [ "$code" != 22 ] || [ "$(cut -d' ' -f3,4 "$ended" 2> /dev/null || true)" != '- 22' ]; then
+            echo "limen-install: a release that cannot be fetched: the runner ended $code and recorded \`$(cat "$ended" 2> /dev/null || true)\`, want 22 and \`- 22\`" >&2
+            exit 1
+        fi
+        says 1 'failed (exit 22)'
+        rm "$ended"
+    else
+        says 0 'nightly job: none on this platform'
+    fi
     grep -qF '/hermetic}/bin' "$home/.bashrc"
     # The one PATH entry, and limen and gh through their links, from a
     # directory with no project: the root is the binary's default under this
@@ -148,30 +216,34 @@ smoke:
         {
             sed -n '/^set -eu$/p' "$home/.local/share/limen-install/nightly"
             # shellcheck disable=SC2016 # the lifted script's own variables
-            printf '%s\n' 'tag="$1"; last="$2"; seen="$3"; ends="$4"' \
+            printf '%s\n' 'tag="$1"; last="$2"; seen="$3"; ends="$4"; ended="$seen.ended"; t=' \
                 'curl() { for arg in "$@"; do url="$arg"; done; printf "%s\n" "$url" > "$seen.url"; }' \
                 'perl() { : > "$seen.ran"; return "$ends"; }' \
                 'bash() { : > "$seen.ran"; return "$ends"; }'
+            sed -n "/^trap 'code=/p" "$home/.local/share/limen-install/nightly"
             sed -n '/^older() {$/,/^}$/p; /^release() {$/,/^}$/p; /^accept() {$/,/^}$/p' "$home/.local/share/limen-install/nightly"
             sed -n '/^accept "\$tag" "\$last" || exit 1$/,$p' "$home/.local/share/limen-install/nightly"
         } > "$runs"
         # shellcheck disable=SC2016 # the runner's own lines, looked for as they are written
-        for line in 'set -eu' 'accept "$tag" "$last" || exit 1' 'mv -f "$last.new" "$last"'; do
+        for line in 'set -eu' 'accept "$tag" "$last" || exit 1' 'mv -f "$last.new" "$last"' 'mv -f "$ended.new" "$ended"'"'"' EXIT'; do
             grep -qF -- "$line" "$runs" || { echo "limen-install: \`$line\` not found in the nightly runner" >&2; exit 1; }
         done
         # ran <tag> <the installer's exit>: the runner's exit, whether the
-        # installer ran, and the record afterwards, from a record of v0.9.0.
+        # installer ran, the record of the last release afterwards, from a
+        # record of v0.9.0, and what the runner wrote of its own end (the
+        # release and the exit code).
         ran() {
             printf 'v0.9.0\n' > "$home/last"
-            rm -f "$home/seen.ran" "$home/seen.url"
+            rm -f "$home/seen.ran" "$home/seen.url" "$home/seen.ended"
             code=0
             sh "$runs" "$1" "$home/last" "$home/seen" "$2" > /dev/null 2>&1 || code=$?
-            printf '%s %s %s\n' "$code" "$([ -e "$home/seen.ran" ] && echo ran || echo 'not run')" "$(cat "$home/last")"
+            printf '%s %s %s, ended: %s\n' "$code" "$([ -e "$home/seen.ran" ] && echo ran || echo 'not run')" "$(cat "$home/last")" "$(cut -d' ' -f3,4 "$home/seen.ended" 2> /dev/null || true)"
         }
-        [ "$(ran v0.8.9 0)" = '1 not run v0.9.0' ] || { echo "limen-install: an older release, in the runner: $(ran v0.8.9 0)" >&2; exit 1; }
-        [ "$(ran v0.10.0 0)" = '0 ran v0.10.0' ] || { echo "limen-install: a later release, in the runner: $(ran v0.10.0 0)" >&2; exit 1; }
+        [ "$(ran v0.8.9 0)" = '1 not run v0.9.0, ended: v0.8.9 1' ] || { echo "limen-install: an older release, in the runner: $(ran v0.8.9 0)" >&2; exit 1; }
+        [ "$(ran v0.10.0 0)" = '0 ran v0.10.0, ended: v0.10.0 0' ] || { echo "limen-install: a later release, in the runner: $(ran v0.10.0 0)" >&2; exit 1; }
+        grep -Eq '^[0-9]+ [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z v0\.10\.0 0$' "$home/seen.ended" || { echo "limen-install: the runner's record of its end reads: $(cat "$home/seen.ended")" >&2; exit 1; }
         [ "$(cat "$home/seen.url")" = 'https://raw.githubusercontent.com/farcloser/limen-install/refs/tags/v0.10.0/limen-install' ] || { echo "limen-install: the runner fetched $(cat "$home/seen.url")" >&2; exit 1; }
-        [ "$(ran v0.10.0 1)" = '1 ran v0.9.0' ] || { echo "limen-install: a later release whose installer failed, in the runner: $(ran v0.10.0 1)" >&2; exit 1; }
+        [ "$(ran v0.10.0 1)" = '1 ran v0.9.0, ended: v0.10.0 1' ] || { echo "limen-install: a later release whose installer failed, in the runner: $(ran v0.10.0 1)" >&2; exit 1; }
         if [ -n "${GITHUB_ACTIONS:-}" ]; then
             domain="gui/$(id -u)"
             for label in world.farcloser.limen-install org.forkcloser.ssh_agent; do
@@ -400,23 +472,24 @@ failure-paths:
     {
         printf 'set -euo pipefail\nlog() { :; }\nok() { :; }\nerr() { :; }\nis_macos() { true; }\nSCRATCH=()\nSHELL_CHANGED=0\nLAUNCHD_FAILED=0\n'
         printf 'HOME=%q\nSHELL=/bin/bash\nLIMEN_INSTALL_NO_LAUNCHD=1\nROOT_EXPR=unused\nHERMETIC_ROOT_DIR_PRESET=%q\n' "$home" "$hard/root"
-        printf 'NIGHTLY_LABEL=world.example.test\nNIGHTLY_HOUR=4\nNIGHTLY_MINUTE=17\nNIGHTLY_RUNNER=%q\nNIGHTLY_LAST=%q\nNIGHTLY_PLIST=%q\nNIGHTLY_LOG=%q\n' \
-            "$hard/data/nightly" "$hard/data/last-release" "$hard/agents/job.plist" "$hard/logs/job.log"
+        printf 'NIGHTLY_LABEL=world.example.test\nNIGHTLY_HOUR=4\nNIGHTLY_MINUTE=17\nNIGHTLY_RUNNER=%q\nNIGHTLY_LAST=%q\nNIGHTLY_ENDED=%q\nNIGHTLY_PLIST=%q\nNIGHTLY_LOG=%q\n' \
+            "$hard/data/nightly" "$hard/data/last-release" "$hard/data/last-run" "$hard/agents/job.plist" "$hard/logs/job.log"
         lift sh_quote xml_escape shell_rc ensure_shell_config
         # install_nightly holds the runner's text, whose own functions close
-        # in column 0: it is lifted to the script's first call, which follows it.
-        sed -n '/^install_nightly() {$/,/^preflight_writes$/p' limen-install | sed '$d' | grep . || { echo "failure-paths: \`install_nightly() {\` not found in limen-install" >&2; exit 1; }
+        # in column 0: it is lifted to the brace that follows its last text,
+        # the plist.
+        awk '/^install_nightly\(\) \{$/ { on = 1 } on { print } on && /^PLIST$/ { last = 1 } on && last && /^}$/ { exit }' limen-install | grep . || { echo "failure-paths: \`install_nightly() {\` not found in limen-install" >&2; exit 1; }
         printf 'ensure_shell_config\nensure_shell_config\ninstall_nightly\n'
     } > "$paths"
     bash "$paths"
     sh -n "$hard/data/nightly"
-    # The runner's three assignments, run by sh as the runner runs them.
+    # The runner's four assignments, run by sh as the runner runs them.
     {
-        grep -E '^(log|last)=|^export HERMETIC_ROOT_DIR=' "$hard/data/nightly"
+        grep -E '^(log|last|ended)=|^export HERMETIC_ROOT_DIR=' "$hard/data/nightly"
         # shellcheck disable=SC2016 # the runner's own variables
-        printf '%s\n' 'printf "%s\n%s\n%s\n" "$log" "$last" "$HERMETIC_ROOT_DIR"'
+        printf '%s\n' 'printf "%s\n%s\n%s\n%s\n" "$log" "$last" "$ended" "$HERMETIC_ROOT_DIR"'
     } > "$scratch/assignments"
-    printf '%s\n%s\n%s\n' "$hard/logs/job.log" "$hard/data/last-release" "$hard/root" > "$scratch/want"
+    printf '%s\n%s\n%s\n%s\n' "$hard/logs/job.log" "$hard/data/last-release" "$hard/data/last-run" "$hard/root" > "$scratch/want"
     sh "$scratch/assignments" > "$scratch/got" || { echo "failure-paths: the runner's assignments do not run:" >&2; cat "$scratch/assignments" >&2; exit 1; }
     cmp -s "$scratch/got" "$scratch/want" || { echo "failure-paths: the runner reads other paths than it was given:" >&2; diff "$scratch/want" "$scratch/got" >&2 || true; exit 1; }
     echo "writes down: a hard path into the nightly runner"
