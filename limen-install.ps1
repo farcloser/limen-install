@@ -39,10 +39,10 @@ $ProgressPreference = 'SilentlyContinue'
 # renovate: depName=git-for-windows/git
 $GitTag = 'v2.56.1.windows.1'
 $GitSha256 = @{
-    'Git-64-bit.exe'            = '74300da8dfe0d844c5449ffb809662f8eeac47916f83730c879c4084890c6c0e'
-    'Git-arm64.exe'             = '3df091fc297001ea9592554ee630111ea27b2d33b137859d08c4971abb319a7c'
-    'PortableGit-64-bit.7z.exe' = 'b20d42da3afa228e9fa6174480de820282667e799440d655e308f700dfa0d0df'
-    'PortableGit-arm64.7z.exe'  = '65b913a56a62d7a91fc11a2eecb08422aaa34332d3b2ea39457d2eda02c2f99c'
+    'Git-64-bit.exe'            = 'c330c72e10b408cc39994bfefdb63542b0d93d21699325c3e0bd874af8a5a559'
+    'Git-arm64.exe'             = '6fe770b534a459d1158011e6ec0cd8390a3bcf44e542bee9e9a650310e111234'
+    'PortableGit-64-bit.7z.exe' = '9dd04a608ceb5f6ab32a73709e0ecb159d211da71b697c45ff81f6dd0c6b49c7'
+    'PortableGit-arm64.7z.exe'  = '0dca0d9f760924a7e6752235d7dd6eb1a9b508ee714b6ed15d89252e5a58c5c9'
 }
 
 function Log($m) { Write-Host "> $m" }
