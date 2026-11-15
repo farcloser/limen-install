@@ -261,9 +261,70 @@ smoke:
     fi
     echo "limen-install: end to end in a throwaway HOME, ok"
 
+# On Windows the one entry point is limen-install.ps1, run as its header says:
+# it finds Git for Windows, or installs it, and hands off to ./limen-install
+# under git-bash. End to end with a throwaway HOME and LOCALAPPDATA, where
+# git-bash and hermetic take their defaults from, and nothing of the job's
+# toolset: its hermetic, aqua and limen variables are dropped and PATH is
+# Windows' own, since a login git-bash appends the PATH it is started with to
+# its own. LOCALAPPDATA goes in with backslashes, as Windows sets it, and
+# SHELL not at all, as in a PowerShell window: git-bash sets it itself.
 [windows]
 smoke:
-    @echo "limen-install: the end-to-end run is unix-only (limen-install.ps1 drives git-bash on Windows)"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # As git-bash names it: on a runner mktemp answers C:/…, and a drive's
+    # colon ends an entry of PATH.
+    home=$(cygpath -u "$(mktemp -d "${TMPDIR:-/tmp}/limen-install-smoke.XXXXXX")")
+    trap 'rm -rf "$home"' EXIT
+    mkdir -p "$home/AppData/Local"
+    root="$home/AppData/Local/hermetic"
+    system=$(cygpath -u "${SYSTEMROOT:-C:\\Windows}")
+    token="${HERMETIC_GITHUB_TOKEN:-${AQUA_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}}"
+    dropped=(SHELL)
+    while IFS= read -r name; do
+        dropped+=("$name")
+    done < <(compgen -e | grep -E '^(HERMETIC|AQUA|LIMEN)_' || true)
+    home_windows=$(cygpath -m "$home")
+    local_windows=$(cygpath -w "$home/AppData/Local")
+    # machine <path> <command…>: the command from the throwaway HOME, as a
+    # user of that machine would run it, with that PATH.
+    machine() {
+        local path="$1"
+        shift
+        (
+            cd "$home"
+            unset "${dropped[@]}"
+            HOME="$home_windows" LOCALAPPDATA="$local_windows" HERMETIC_GITHUB_TOKEN="$token" PATH="$path" "$@"
+        )
+    }
+    machine "$system/System32:$system:$system/System32/WindowsPowerShell/v1.0" \
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w "$PWD/limen-install.ps1")" 2>&1 | tee "$home/ran"
+    grep -qF 'handing off to ./limen-install under git-bash' "$home/ran" || { echo "limen-install.ps1: no hand-off to ./limen-install in its output" >&2; exit 1; }
+    test -s "$root/hermetic.yaml"
+    test -s "$root/aqua-checksums.json"
+    test -x "$root/bin/hermetic.exe"
+    if [ -e "$root/.pins" ] || [ -e "$root/.lock" ]; then
+        echo "limen-install: the stage of the pins or the root's lock outlives the run" >&2
+        exit 1
+    fi
+    grep -qF '/hermetic}/bin' "$home/.bashrc"
+    # limen and gh through their links, from a directory with no project, and
+    # the one PATH entry as the next git-bash finds it: a login shell, which
+    # reads the rc the run appended to, with no other way to the root's bin.
+    # Each is tried whatever the one before it did: a red leg says all three.
+    echo "limen-install.ps1: the root's bin, $root/bin, holds: $(cd "$root/bin" && echo *)"
+    bad=0
+    machine "$root/bin:/usr/bin:/bin" limen version || { echo "limen-install: limen does not run through its link in the root's bin" >&2; bad=1; }
+    machine "$root/bin:/usr/bin:/bin" gh --version > /dev/null || { echo "limen-install: gh does not run through its link in the root's bin" >&2; bad=1; }
+    machine "/usr/bin:/bin" bash -l -c 'limen version' || { echo "limen-install: limen is not on the PATH of a new git-bash after the run" >&2; bad=1; }
+    [ "$bad" = 0 ]
+    # --status on the root the install just made.
+    machine "/usr/bin:/bin" bash "$PWD/limen-install" --status > "$home/status" 2>&1 || { echo "limen-install: --status did not end well on the root the install made:" >&2; cat "$home/status" >&2; exit 1; }
+    for line in "pins: the root holds this script's" 'nightly job: none on this platform'; do
+        grep -qF -- "$line" "$home/status" || { echo "limen-install: --status does not say \`$line\`:" >&2; cat "$home/status" >&2; exit 1; }
+    done
+    echo "limen-install.ps1: end to end in a throwaway HOME, ok"
 
 # limen-install's write of the pins into the root, which the sessions' tool
 # root reads through links at any hour: `put` and `install_tools`, lifted as
