@@ -68,6 +68,8 @@ readonly NIGHTLY_LABEL="world.farcloser.limen-install"
 readonly NIGHTLY_HOUR=4 NIGHTLY_MINUTE=17
 NIGHTLY_RUNNER="${XDG_DATA_HOME:-$HOME/.local/share}/limen-install/nightly"
 readonly NIGHTLY_RUNNER
+# The release the nightly job last ran, kept beside its runner.
+readonly NIGHTLY_LAST="${NIGHTLY_RUNNER%/*}/last-release"
 readonly NIGHTLY_PLIST="$HOME/Library/LaunchAgents/$NIGHTLY_LABEL.plist"
 readonly NIGHTLY_LOG="$HOME/Library/Logs/limen-install.log"
 LAUNCHD_FAILED=0  # set to 1 when a service could not be loaded (→ exit 1 at the end)
@@ -605,15 +607,41 @@ url=\$(curl --proto '=https' --tlsv1.2 -fsSLI --connect-timeout 20 --max-time 60
   --retry 5 --retry-delay 3 --retry-all-errors \
   -o /dev/null -w '%{url_effective}' https://github.com/farcloser/limen-install/releases/latest)
 tag=\${url##*/}
-case "\$tag" in
-  v*) ;;
-  *) echo "limen-install nightly: no release tag behind \$url" >&2; exit 1 ;;
-esac
+# A release is only ever followed by a later one. Creating a v* tag takes an
+# admin, but the release this job follows is the one GitHub calls latest, and
+# a release object for an older tag is published, and marked latest, by any
+# account that may write to the repository: without this the job would take
+# the machine back to that tag's pins.
+last="$NIGHTLY_LAST"
+# older <a> <b>: release a comes before release b.
+older() {
+  [ "\$1" != "\$2" ] && [ "\$(printf '%s\n%s\n' "\${1#v}" "\${2#v}" | sort -t. -k1,1n -k2,2n -k3,3n | head -n 1)" = "\${1#v}" ]
+}
+# release <text>: the text is a release tag, vX.Y.Z.
+release() {
+  printf '%s\n' "\$1" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+\$'
+}
+# accept <tag> <file>: the tag is a release, and not older than the one the
+# file records as the last run.
+accept() {
+  if ! release "\$1"; then
+    echo "limen-install nightly: \$1 is not a release tag" >&2
+    return 1
+  fi
+  ran=\$(cat "\$2" 2>/dev/null || true)
+  if release "\$ran" && older "\$1" "\$ran"; then
+    echo "limen-install nightly: \$1 is older than \$ran, the last release this job ran: not run (remove \$2 to accept it)" >&2
+    return 1
+  fi
+}
+accept "\$tag" "\$last" || exit 1
 t=\$(mktemp -d "\${TMPDIR:-/tmp}/limen-install.XXXXXX")
 trap 'rm -rf "\$t"' EXIT
+# The tag by its full name: a branch may carry a release's name, and takes
+# no admin to push.
 curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 20 --max-time 120 \
   --retry 5 --retry-delay 3 --retry-all-errors -o "\$t/limen-install" \
-  "https://raw.githubusercontent.com/farcloser/limen-install/\$tag/limen-install"
+  "https://raw.githubusercontent.com/farcloser/limen-install/refs/tags/\$tag/limen-install"
 echo "limen-install nightly: \$(date -u +%Y-%m-%dT%H:%M:%SZ) running \$tag"
 # An hour for the whole run, enforced from outside it: the installer's own
 # downloads are bounded, hermetic's are not, and launchd does not start this
@@ -624,6 +652,7 @@ if command -v perl >/dev/null 2>&1; then
 else
   bash "\$t/limen-install"
 fi
+printf '%s\n' "\$tag" > "\$last.new" && mv -f "\$last.new" "\$last"
 RUNNER
   chmod 755 "$runner"
   mv "$runner" "$NIGHTLY_RUNNER"
