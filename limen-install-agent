@@ -709,5 +709,5 @@ merge_settings
 if [ "$VERIFY" = 1 ]; then verify; fi
 ok "done — restart Claude Code sessions to pick up the settings"
 log "remaining, on GitHub: invite $BOT_LOGIN as an outside collaborator (write) on each repository it may push to"
-log "remaining, per repository: add the bot to .allowed_signers so \`just lint\` verifies its signatures:"
+log "remaining, per repository: add the bot to .lint-signers so \`just lint\` verifies its signatures:"
 log "  $BOT_EMAIL namespaces=\"git\" $(printf '%s' "$BOT_KEY" | awk '{print $1, $2}')"
