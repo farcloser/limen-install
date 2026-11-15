@@ -4,7 +4,7 @@ import '.limen/just/main.just'
 
 lint: do::lint::default
 fix: do::fix::default
-test: installer-checksum smoke farclauder merge-settings
+test: installer-checksum smoke pin-write farclauder merge-settings
 
 # --- added by limen fix: the recipe the security workflow runs ---
 security: do::security::default
@@ -51,17 +51,25 @@ smoke:
     home=$(mktemp -d "${TMPDIR:-/tmp}/limen-install-smoke.XXXXXX")
     trap 'rm -rf "$home"' EXIT
     script="$PWD/limen-install"
-    (cd "$home" && env -i HOME="$home" USER="${USER:-}" SHELL=/bin/bash PATH=/usr/bin:/bin:/usr/sbin:/sbin TMPDIR="${TMPDIR:-/tmp}" \
-        GITHUB_TOKEN="${GITHUB_TOKEN:-}" HERMETIC_GITHUB_TOKEN="${HERMETIC_GITHUB_TOKEN:-${AQUA_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}}" \
-        HTTP_PROXY="${HTTP_PROXY:-}" HTTPS_PROXY="${HTTPS_PROXY:-}" NO_PROXY="${NO_PROXY:-}" \
-        http_proxy="${http_proxy:-}" https_proxy="${https_proxy:-}" no_proxy="${no_proxy:-}" \
-        LIMEN_INSTALL_NO_LAUNCHD="$([ -n "${GITHUB_ACTIONS:-}" ] && echo 0 || echo 1)" bash "$script")
     if [ "$(uname -s)" = Darwin ]; then
         root="$home/Library/Application Support/hermetic"
     else
         root="$home/.local/share/hermetic"
     fi
+    # The stage a killed run left: the install must end well over it, and
+    # leave none (below).
+    mkdir -p "$root/.pins" && echo stale > "$root/.pins/stale"
+    (cd "$home" && env -i HOME="$home" USER="${USER:-}" SHELL=/bin/bash PATH=/usr/bin:/bin:/usr/sbin:/sbin TMPDIR="${TMPDIR:-/tmp}" \
+        GITHUB_TOKEN="${GITHUB_TOKEN:-}" HERMETIC_GITHUB_TOKEN="${HERMETIC_GITHUB_TOKEN:-${AQUA_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}}" \
+        HTTP_PROXY="${HTTP_PROXY:-}" HTTPS_PROXY="${HTTPS_PROXY:-}" NO_PROXY="${NO_PROXY:-}" \
+        http_proxy="${http_proxy:-}" https_proxy="${https_proxy:-}" no_proxy="${no_proxy:-}" \
+        LIMEN_INSTALL_NO_LAUNCHD="$([ -n "${GITHUB_ACTIONS:-}" ] && echo 0 || echo 1)" bash "$script")
     test -s "$root/hermetic.yaml"
+    # The pins are staged, then renamed into place: nothing of either is left.
+    if [ -e "$root/.pins" ] || find "$root" -maxdepth 1 \( -name '.*.yaml.*' -o -name '.*.json.*' \) | grep -q .; then
+        echo "limen-install: a staged pin file was left in $root" >&2
+        exit 1
+    fi
     test -s "$root/aqua-checksums.json"
     test -x "$root/bin/hermetic"
     grep -qF '/hermetic}/bin' "$home/.bashrc"
@@ -100,6 +108,105 @@ smoke:
 [windows]
 smoke:
     @echo "limen-install: the end-to-end run is unix-only (limen-install.ps1 drives git-bash on Windows)"
+
+# limen-install's write of the pins into the root, which the sessions' tool
+# root reads through links at any hour: `put` and `install_tools`, lifted as
+# merge-settings lifts its function, run on a throwaway root with a stand-in
+# for hermetic that checks what the root holds each time it is called. The
+# root must never hold pins without their checksums, every file must arrive
+# by a rename (a hard link to the old file keeps the old bytes), and a run
+# whose checksums fail must leave the root as it was.
+[unix]
+pin-write:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    scratch=$(mktemp -d "${TMPDIR:-/tmp}/pin-write.XXXXXX")
+    trap 'rm -rf "$scratch"' EXIT
+    scratch=$(cd -P "$scratch" && pwd -P)
+    root="$scratch/the root"
+    harness="$scratch/harness"
+    standin="$scratch/hermetic"
+    files="hermetic.yaml registry.yaml policy.yaml aqua-checksums.json"
+    # The stand-in: `--log-level warn -c <config> <command> [flag]`. Each call
+    # checks the root as a reader would find it at that moment, then does
+    # what the command does to the checksums beside the config it is given.
+    # shellcheck disable=SC2016 # the stand-in's own variables, expanded when it runs
+    printf '%s\n' '#!/bin/sh' 'set -eu' \
+        'config="$4"; call="$5${6:+ $6}"; dir="${config%/*}"' \
+        'holds() { [ "$(cat "$ROOT/$1")" = "$2" ] || { echo "pin-write: at \`$call\` the root'"'"'s $1 is \`$(cat "$ROOT/$1")\`, want \`$2\`" >&2; exit 1; }; }' \
+        'staged() { [ "$dir" = "$ROOT/.pins" ] || { echo "pin-write: \`$call\` on $config, not on the stage" >&2; exit 1; }; }' \
+        'echo "$call" >> "$CALLS"' \
+        'case "$call" in' \
+        '  update-checksum)' \
+        '    staged; holds hermetic.yaml "old pins"; holds aqua-checksums.json "old checksums"' \
+        '    [ ! -e "$dir/policy.yaml" ] || { echo "pin-write: a policy.yaml beside the staged config" >&2; exit 1; }' \
+        '    [ "$(cat "$dir/aqua-checksums.json")" = "old checksums" ] || { echo "pin-write: the stage does not start from the root'"'"'s checksums" >&2; exit 1; }' \
+        '    [ "${FAIL:-}" != checksums ] || exit 1' \
+        '    echo "old and new checksums" > "$dir/aqua-checksums.json" ;;' \
+        '  "update-checksum --prune")' \
+        '    staged; holds hermetic.yaml "new pins"; holds registry.yaml "new registry"; holds policy.yaml "new policy"' \
+        '    holds aqua-checksums.json "old and new checksums"' \
+        '    echo "new checksums" > "$dir/aqua-checksums.json" ;;' \
+        '  "install -a")' \
+        '    [ "$config" = "$ROOT/hermetic.yaml" ] || { echo "pin-write: install on $config" >&2; exit 1; }' \
+        '    holds hermetic.yaml "new pins"; holds aqua-checksums.json "new checksums"' \
+        '    [ ! -e "$ROOT/.pins" ] || { echo "pin-write: the stage outlives the write" >&2; exit 1; } ;;' \
+        '  *) echo "pin-write: unexpected call \`$call\`" >&2; exit 1 ;;' \
+        'esac' > "$standin"
+    chmod 755 "$standin"
+    {
+        # shellcheck disable=SC2016 # the harness's own $ROOT, expanded when it runs
+        printf 'set -euo pipefail\nok() { :; }\nROOT=%q\nSTAGE="$ROOT/.pins"\nhermetic_bin() { echo %q; }\n' "$root" "$standin"
+        # Every rename, watched: what a reader finds between two of them.
+        # shellcheck disable=SC2016 # the harness's own variables
+        printf '%s\n' 'mv() {' '  command mv "$@"' \
+            '  if [ "$(cat "$ROOT/hermetic.yaml")" = "new pins" ] && [ "$(cat "$ROOT/aqua-checksums.json")" = "old checksums" ]; then' \
+            '    echo "pin-write: the root holds the new pins with the old checksums" >&2; exit 1' \
+            '  fi' '}'
+        sed -n '/^put() {/,/^}$/p' limen-install
+        sed -n '/^install_tools() {$/,/^}$/p' limen-install
+        printf 'install_tools\n'
+    } > "$harness"
+    for line in 'put() {' 'install_tools() {'; do
+        grep -qF -- "$line" "$harness" || { echo "pin-write: \`$line\` not found in limen-install" >&2; exit 1; }
+    done
+    # A root with yesterday's files, a hard link to each, and today's stage.
+    fresh() {
+        rm -rf "$root" "$scratch/witness" "$scratch/calls"
+        mkdir -p "$root/.pins" "$scratch/witness"
+        printf 'old pins\n' > "$root/hermetic.yaml"
+        printf 'old registry\n' > "$root/registry.yaml"
+        printf 'old policy\n' > "$root/policy.yaml"
+        printf 'old checksums\n' > "$root/aqua-checksums.json"
+        for f in $files; do ln "$root/$f" "$scratch/witness/$f"; done
+        printf 'new pins\n' > "$root/.pins/hermetic.yaml"
+        printf 'new registry\n' > "$root/.pins/registry.yaml"
+        printf 'new policy\n' > "$root/.pins/root-policy.yaml"
+    }
+    fresh
+    ROOT="$root" CALLS="$scratch/calls" bash "$harness"
+    [ "$(tr '\n' ',' < "$scratch/calls")" = 'update-checksum,update-checksum --prune,install -a,' ] || { echo "pin-write: hermetic was called as: $(tr '\n' ',' < "$scratch/calls")" >&2; exit 1; }
+    echo "ordered: the checksums of old and new pins, then the pins, then the prune"
+    for f in $files; do
+        old="old ${f%.*}"; old="${old/hermetic/pins}"; old="${old/aqua-checksums/checksums}"
+        [ "$(cat "$scratch/witness/$f")" = "$old" ] || { echo "pin-write: $f was written over, not renamed in: its old link reads \`$(cat "$scratch/witness/$f")\`" >&2; exit 1; }
+        [ ! "$root/$f" -ef "$scratch/witness/$f" ] || { echo "pin-write: $f was not replaced" >&2; exit 1; }
+    done
+    [ "$(find "$root" -mindepth 1 | wc -l | tr -d ' ')" = 4 ] || { echo "pin-write: the root holds more than its four files:" >&2; find "$root" -mindepth 1 >&2; exit 1; }
+    echo "renames: each of the four files, nothing staged left behind"
+    fresh
+    if ROOT="$root" CALLS="$scratch/calls" FAIL=checksums bash "$harness" 2> "$scratch/err"; then
+        echo "pin-write: a run whose checksums failed ended well" >&2
+        exit 1
+    fi
+    for f in $files; do
+        [ "$root/$f" -ef "$scratch/witness/$f" ] || { echo "pin-write: $f changed in a run whose checksums failed" >&2; exit 1; }
+    done
+    echo "keeps: the root as it was when the checksums fail"
+
+[windows]
+pin-write:
+    @echo "pin-write: unix only, as the bash harness it runs limen-install's functions in"
 
 # farclauder, as limen-install-agent writes it, run against throwaway clones:
 # it removes a worktree, checkout and record, and refuses everything else: a
