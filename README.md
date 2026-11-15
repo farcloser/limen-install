@@ -84,10 +84,16 @@ latest release of this script every night (04:17 local; log in
 release tag — no clone, no credential, no key: the trust is TLS to github.com and the
 ruleset that lets only the repository's admins create a `v*` tag — and runs it with the
 system's tools first on `PATH`, and a preset root exported, since launchd sources no rc.
+The job only moves forward: it records the release it ran
+(`~/.local/share/limen-install/last-release`) and refuses an older one, since the release
+GitHub calls latest can be pointed at an older tag by any account that may write to the
+repository. Going back on purpose is removing that file.
 Renovate moves the pins in this repository; a tag ships them to every machine the next
 night. The agent is reloaded when its plist changes, except from inside the nightly run
-itself (that would kill the running job; the next login loads it). Linux and Windows get
-no job yet: run the script by hand there.
+itself (that would kill the running job; the next login loads it). A run is bounded: each
+download the script makes has a time limit, and the job gives the whole run an hour, since
+launchd does not start a job again while an earlier run of it is still there, so one that
+hung would be the last. Linux and Windows get no job yet: run the script by hand there.
 
 ## Versioning
 

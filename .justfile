@@ -88,6 +88,61 @@ smoke:
         test -x "$home/.local/share/limen-install/nightly"
         plutil -lint "$home/Library/LaunchAgents/world.farcloser.limen-install.plist"
         sh -n "$home/.local/share/limen-install/nightly"
+        # The runner's own judgement of a release, lifted from the runner the
+        # install wrote: later or equal runs, older and anything else does not.
+        judge="$home/judge"
+        {
+            sed -n '/^older() {$/,/^}$/p; /^release() {$/,/^}$/p; /^accept() {$/,/^}$/p' "$home/.local/share/limen-install/nightly"
+            # shellcheck disable=SC2016 # the lifted script's own arguments
+            printf '%s\n' 'accept "$1" "$2"'
+        } > "$judge"
+        grep -q '^accept() {$' "$judge" || { echo "limen-install: the nightly runner has no accept function" >&2; exit 1; }
+        printf 'v0.9.0\n' > "$home/last"
+        for tag in v0.9.0 v0.10.0 v1.0.0; do
+            sh "$judge" "$tag" "$home/last" || { echo "limen-install: the nightly runner refused $tag after v0.9.0" >&2; exit 1; }
+        done
+        sh "$judge" v0.10.0 "$home/absent" || { echo "limen-install: the nightly runner refused a first release" >&2; exit 1; }
+        for tag in v0.8.9 v0.2.10 latest v1.2 'v1.2.3;x' ''; do
+            if sh "$judge" "$tag" "$home/last" 2> /dev/null; then
+                echo "limen-install: the nightly runner accepted \"$tag\" after v0.9.0" >&2
+                exit 1
+            fi
+        done
+        # What the runner does with that judgement, on its own lines from the
+        # judgement to its end: a refused release ends the run before the
+        # installer, and only a run that ended well is recorded. A function
+        # shadows a command whatever PATH the runner sets, so curl, perl and
+        # bash are stand-ins here: the fetch records its URL, the installer
+        # that it ran and ends as told. The runner's `set -eu` is its own
+        # line too: it is what ends the run when the installer fails.
+        runs="$home/runs"
+        {
+            sed -n '/^set -eu$/p' "$home/.local/share/limen-install/nightly"
+            # shellcheck disable=SC2016 # the lifted script's own variables
+            printf '%s\n' 'tag="$1"; last="$2"; seen="$3"; ends="$4"' \
+                'curl() { for arg in "$@"; do url="$arg"; done; printf "%s\n" "$url" > "$seen.url"; }' \
+                'perl() { : > "$seen.ran"; return "$ends"; }' \
+                'bash() { : > "$seen.ran"; return "$ends"; }'
+            sed -n '/^older() {$/,/^}$/p; /^release() {$/,/^}$/p; /^accept() {$/,/^}$/p' "$home/.local/share/limen-install/nightly"
+            sed -n '/^accept "\$tag" "\$last" || exit 1$/,$p' "$home/.local/share/limen-install/nightly"
+        } > "$runs"
+        # shellcheck disable=SC2016 # the runner's own lines, looked for as they are written
+        for line in 'set -eu' 'accept "$tag" "$last" || exit 1' 'mv -f "$last.new" "$last"'; do
+            grep -qF -- "$line" "$runs" || { echo "limen-install: \`$line\` not found in the nightly runner" >&2; exit 1; }
+        done
+        # ran <tag> <the installer's exit>: the runner's exit, whether the
+        # installer ran, and the record afterwards, from a record of v0.9.0.
+        ran() {
+            printf 'v0.9.0\n' > "$home/last"
+            rm -f "$home/seen.ran" "$home/seen.url"
+            code=0
+            sh "$runs" "$1" "$home/last" "$home/seen" "$2" > /dev/null 2>&1 || code=$?
+            printf '%s %s %s\n' "$code" "$([ -e "$home/seen.ran" ] && echo ran || echo 'not run')" "$(cat "$home/last")"
+        }
+        [ "$(ran v0.8.9 0)" = '1 not run v0.9.0' ] || { echo "limen-install: an older release, in the runner: $(ran v0.8.9 0)" >&2; exit 1; }
+        [ "$(ran v0.10.0 0)" = '0 ran v0.10.0' ] || { echo "limen-install: a later release, in the runner: $(ran v0.10.0 0)" >&2; exit 1; }
+        [ "$(cat "$home/seen.url")" = 'https://raw.githubusercontent.com/farcloser/limen-install/refs/tags/v0.10.0/limen-install' ] || { echo "limen-install: the runner fetched $(cat "$home/seen.url")" >&2; exit 1; }
+        [ "$(ran v0.10.0 1)" = '1 ran v0.9.0' ] || { echo "limen-install: a later release whose installer failed, in the runner: $(ran v0.10.0 1)" >&2; exit 1; }
         if [ -n "${GITHUB_ACTIONS:-}" ]; then
             domain="gui/$(id -u)"
             for label in world.farcloser.limen-install org.forkcloser.ssh_agent; do
