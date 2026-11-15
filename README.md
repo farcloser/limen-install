@@ -99,10 +99,6 @@ version` on the machine is the answer to that question. Tags are signed and
 cut by hand on `main`. There are no release assets: a tag's source tarball is
 the release.
 
-[homebrew-brews](https://github.com/farcloser/homebrew-brews)'
-`Formula/limen.rb` installs from that tarball and takes its version from the
-tag, so `brew upgrade` follows every tag.
-
 ## Letting a coding agent contribute: limen-install-agent
 
 A second, optional bootstrap sets a machine up so a Claude Code session can
