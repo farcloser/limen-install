@@ -4,7 +4,7 @@ import '.limen/just/main.just'
 
 lint: do::lint::default
 fix: do::fix::default
-test: installer-checksum smoke pin-write farclauder merge-settings
+test: installer-checksum smoke pin-write farclauder merge-settings agent-root
 
 # --- added by limen fix: the recipe the security workflow runs ---
 security: do::security::default
@@ -385,3 +385,95 @@ merge-settings:
 [windows]
 merge-settings:
     @echo "merge-settings: unix only, as the bash harness it runs limen-install-agent's function in"
+
+# install_agent_root, as limen-install-agent runs it, against a throwaway
+# machine root and sessions' root: the function and the script's own
+# declarations, lifted as merge-settings lifts its own, with a stand-in for
+# the machine's hermetic. The sessions' pins must be the machine's files
+# themselves, so that what limen-install writes at night is what a session
+# reads the next morning: a copy froze them at the day this script last ran.
+[unix]
+agent-root:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    scratch=$(mktemp -d "${TMPDIR:-/tmp}/agent-root.XXXXXX")
+    trap 'rm -rf "$scratch"' EXIT
+    scratch=$(cd -P "$scratch" && pwd -P)
+    machine="$scratch/machine root"
+    agent="$scratch/home/.local/share/limen-agent"
+    harness="$scratch/harness"
+    mkdir -p "$machine/bin" "$scratch/home"
+    for f in hermetic.yaml registry.yaml policy.yaml aqua-checksums.json; do
+        printf 'first %s\n' "$f" > "$machine/$f"
+    done
+    # The machine's hermetic, as far as the function asks it: where its root
+    # is, and its version.
+    # shellcheck disable=SC2016 # the stand-in's own $1, expanded when it runs
+    printf '%s\n' '#!/bin/sh' 'case "$1" in' "  root-dir) echo \"$machine/store\" ;;" '  version) echo 0.0.0 ;;' 'esac' > "$machine/bin/hermetic"
+    chmod 755 "$machine/bin/hermetic"
+    {
+        printf 'set -euo pipefail\n'
+        sed -n '/^PATH="\/usr\/bin:/p' limen-install-agent
+        printf 'ok() { :; }\nerr() { printf "%%s\\n" "$*" >&2; }\nunset CLAUDE_CONFIG_DIR\nHOME=%q\nAGENT_ROOT=%q\nMACHINE_HERMETIC=%q\n' \
+            "$scratch/home" "$agent" "$machine/bin/hermetic"
+        awk '/^readonly CLAUDE_HOME=/{block=1} block && !/^readonly /{exit} block' limen-install-agent
+        sed -n '/^install_agent_root() {$/,/^}$/p' limen-install-agent
+        printf 'install_agent_root\n'
+    } > "$harness"
+    for line in 'PATH="/usr/bin:' 'readonly AGENT_HERMETIC=' 'install_agent_root() {'; do
+        grep -qF -- "$line" "$harness" || { echo "agent-root: \`$line\` not found in limen-install-agent" >&2; exit 1; }
+    done
+    linked() { # linked: every pin file and the binary are the machine's own
+        for f in hermetic.yaml registry.yaml policy.yaml aqua-checksums.json bin/hermetic; do
+            if [ ! -L "$agent/hermetic/$f" ] || [ ! "$agent/hermetic/$f" -ef "$machine/$f" ]; then
+                echo "agent-root: $agent/hermetic/$f is not a link to the machine's $f" >&2
+                ls -l "$agent/hermetic" "$agent/hermetic/bin" >&2
+                exit 1
+            fi
+        done
+    }
+    bash "$harness"
+    linked
+    echo "links: the sessions' pins and binary to the machine's"
+    # The nightly's write: a new file renamed over the old one.
+    printf 'second\n' > "$machine/.staged" && mv -f "$machine/.staged" "$machine/hermetic.yaml"
+    [ "$(cat "$agent/hermetic/hermetic.yaml")" = second ] || { echo "agent-root: the sessions' root did not follow the machine's new pins" >&2; exit 1; }
+    echo "follows: a pin file the machine's installer replaced"
+    # A root an earlier version of the script filled with copies.
+    for f in hermetic.yaml registry.yaml policy.yaml aqua-checksums.json; do
+        rm "$agent/hermetic/$f" && printf 'a stale copy\n' > "$agent/hermetic/$f"
+    done
+    bash "$harness"
+    linked
+    echo "replaces: the copies an earlier run left"
+    rm "$machine/registry.yaml"
+    if bash "$harness" 2> "$scratch/err"; then
+        echo "agent-root: a machine root without its registry was accepted" >&2
+        exit 1
+    fi
+    grep -qF 'registry.yaml is missing' "$scratch/err" || { echo "agent-root: the refusal does not name the missing file:" >&2; cat "$scratch/err" >&2; exit 1; }
+    echo "refuses: a machine root that lacks a pin file"
+    # A session's own shell: the machine's hermetic answers the sessions' root.
+    # Four real files there, as a root filled by copies has.
+    printf 'second\n' > "$machine/registry.yaml"
+    for f in hermetic.yaml registry.yaml policy.yaml aqua-checksums.json; do
+        rm "$agent/hermetic/$f" && printf 'the sessions own %s\n' "$f" > "$agent/hermetic/$f"
+    done
+    # shellcheck disable=SC2016 # the stand-in's own $1, expanded when it runs
+    printf '%s\n' '#!/bin/sh' 'case "$1" in' "  root-dir) echo \"$agent/hermetic/store\" ;;" '  version) echo 0.0.0 ;;' 'esac' > "$machine/bin/hermetic"
+    if HERMETIC_ROOT_DIR="$agent/hermetic" bash "$harness" 2> "$scratch/err"; then
+        echo "agent-root: a hermetic that answers the sessions' root was accepted" >&2
+        exit 1
+    fi
+    grep -qF "HERMETIC_ROOT_DIR=$agent/hermetic" "$scratch/err" || { echo "agent-root: the refusal does not name the shell's root:" >&2; cat "$scratch/err" >&2; exit 1; }
+    for f in hermetic.yaml registry.yaml policy.yaml aqua-checksums.json; do
+        if [ -L "$agent/hermetic/$f" ] || [ "$(cat "$agent/hermetic/$f")" != "the sessions own $f" ]; then
+            echo "agent-root: $agent/hermetic/$f did not survive a run from a session's shell" >&2
+            exit 1
+        fi
+    done
+    echo "refuses: a shell whose hermetic root is the sessions' own, the files untouched"
+
+[windows]
+agent-root:
+    @echo "agent-root: unix only, as the bash harness it runs limen-install-agent's function in"

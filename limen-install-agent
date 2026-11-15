@@ -335,31 +335,43 @@ pin_github_host_keys() {
   ok "GitHub host keys pinned: $KNOWN_HOSTS ($(grep -c '^github.com ' "$KNOWN_HOSTS") keys)"
 }
 
-# The sessions' hermetic root: the toolset's pins, copied from the machine's
+# The sessions' hermetic root: the toolset's pins, linked to the machine's
 # root (hermetic.yaml, registry.yaml, policy.yaml and the checksums limen-install
 # wrote), so a session resolves limen and the fork by name through the same
-# binary, into a store of its own, lazily on first use. Its bin/hermetic is a
-# symlink to the machine's binary, never a copy: every link hermetic plants in
-# a root's bin points at that root's bin/hermetic and it links nothing into a
-# root that has none, and a copy is the pinned version of the day it was made
-# while the link follows the nightly bump. The recipes' PATH is this bin and the
-# base system, so this is the one hermetic a session's recipes see; it reads
-# HERMETIC_ROOT_DIR from the sessions' settings. Nothing per repository: a
-# session approves a checkout's policy and installs its pins itself, into this
-# root.
+# binary, into a store of its own, lazily on first use. Links, never copies,
+# and bin/hermetic likewise: a copy is the pin of the day it was made, and
+# nothing runs this script at night, so a copied pin stayed where the last
+# hand run left it while the machine's moved; a link follows the nightly bump.
+# limen-install moves each of the four in by a rename, the checksums of new
+# pins before the pins, so a session reads an old file or a new one and never
+# pins without their checksums. Every link hermetic plants in a root's bin
+# points at that root's bin/hermetic, and it links nothing into a root that
+# has none.
+# The recipes' PATH is this bin and the base system, so this is the one
+# hermetic a session's recipes see; it reads HERMETIC_ROOT_DIR from the
+# sessions' settings. Nothing per repository: a session approves a checkout's
+# policy and installs its pins itself, into this root.
 install_agent_root() {
   mkdir -p "$AGENT_HERMETIC/bin" "$AGENT_HOME" "$AGENT_ROOT/go" "$AGENT_ROOT/go-build" "$AGENT_ROOT/cargo" "$AGENT_ROOT/cache" "$AGENT_ROOT/sigstore" "$AGENT_ROOT/share"
   local machine_root f
   machine_root="$(cd / && "$MACHINE_HERMETIC" root-dir)"
   machine_root="${machine_root%/store}"
-  for f in hermetic.yaml registry.yaml policy.yaml aqua-checksums.json; do
-    [ -f "$machine_root/$f" ] || { err "$machine_root/$f is missing — run limen-install first"; exit 1; }
-    cp "$machine_root/$f" "$AGENT_HERMETIC/$f"
-  done
-  [ -x "$machine_root/bin/hermetic" ] || { err "$machine_root/bin/hermetic is missing — run limen-install first"; exit 1; }
+  # A session's shell has HERMETIC_ROOT_DIR set to the sessions' root, and the
+  # machine's hermetic then answers that root: each link below would replace
+  # a pin file with a link to itself.
+  if [ "$machine_root" -ef "$AGENT_HERMETIC" ]; then
+    err "hermetic's root here is the sessions' own ($AGENT_HERMETIC; HERMETIC_ROOT_DIR=${HERMETIC_ROOT_DIR:-unset}) — run this from a shell whose root is the machine's"
+    exit 1
+  fi
   # -f replaces a copy an earlier hand or run left; -n keeps ln from following
   # an existing link (the spelling BSD and GNU ln share; BSD's -h is GNU's
   # --help).
+  for f in hermetic.yaml registry.yaml policy.yaml aqua-checksums.json; do
+    [ -f "$machine_root/$f" ] || { err "$machine_root/$f is missing — run limen-install first"; exit 1; }
+    ln -sfn "$machine_root/$f" "$AGENT_HERMETIC/$f"
+    [ "$AGENT_HERMETIC/$f" -ef "$machine_root/$f" ] || { err "$AGENT_HERMETIC/$f is not the machine's $f"; exit 1; }
+  done
+  [ -x "$machine_root/bin/hermetic" ] || { err "$machine_root/bin/hermetic is missing — run limen-install first"; exit 1; }
   ln -sfn "$machine_root/bin/hermetic" "$AGENT_HERMETIC/bin/hermetic"
   [ "$AGENT_HERMETIC/bin/hermetic" -ef "$machine_root/bin/hermetic" ] || { err "$AGENT_HERMETIC/bin/hermetic is not the machine's hermetic"; exit 1; }
   ok "sessions' tool root: $AGENT_ROOT (hermetic $("$MACHINE_HERMETIC" version) through $AGENT_HERMETIC/bin/hermetic, pins from $machine_root)"
