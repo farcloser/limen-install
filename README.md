@@ -93,7 +93,10 @@ night. The agent is reloaded when its plist changes, except from inside the nigh
 itself (that would kill the running job; the next login loads it). A run is bounded: each
 download the script makes has a time limit, and the job gives the whole run an hour, since
 launchd does not start a job again while an earlier run of it is still there, so one that
-hung would be the last. Linux and Windows get no job yet: run the script by hand there.
+hung would be the last. One run holds a root at a time: a hand run started while the
+nightly one is at work, or the other way round, stops and names the process that holds the
+root, and a lock whose holder is gone is taken over. Linux and Windows get no job yet: run
+the script by hand there.
 
 ## Versioning
 

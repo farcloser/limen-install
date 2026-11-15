@@ -40,6 +40,9 @@ readonly HERMETIC_ROOT_DIR_PRESET
 # Where the next pins are written and their checksums computed, before any
 # of them is moved into the root: under it, so that the move is a rename.
 readonly STAGE="$ROOT/.pins"
+# One run on a root at a time: a directory, made by the run that holds it,
+# with its process id inside.
+readonly LOCK="$ROOT/.lock"
 
 # Every tool this script runs is the system's, for the whole run. On a machine
 # that already has the toolset, cat, mkdir, mktemp, rm, curl and the rest of
@@ -82,6 +85,55 @@ is_windows() { case "$OSTYPE" in msys*|cygwin*) return 0 ;; *) return 1 ;; esac;
 log() { printf '› %s\n' "$*"; }
 ok()  { printf '✓ %s\n' "$*"; }
 err() { printf '✗ %s\n' "$*" >&2; }
+
+# What a run leaves nowhere, however it ends: the scratch it made, and the
+# lock when it is this run's. Never the lock of the run that refused this one.
+SCRATCH=()
+LOCK_HELD=0
+cleanup() {
+  if [ "${#SCRATCH[@]}" -gt 0 ]; then rm -rf "${SCRATCH[@]}"; fi
+  if [ "$LOCK_HELD" = 1 ]; then rm -rf "$LOCK"; fi
+}
+trap cleanup EXIT
+
+# sh_quote <text>: the text as one word of sh, whatever it holds: in single
+# quotes, a single quote of its own closed, escaped and reopened. For a path
+# written into a script: inside double quotes a quote ends the string, and
+# a dollar or a backtick is expanded when the script runs.
+sh_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+
+# xml_escape <text>: the text as the content of an XML element.
+xml_escape() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+
+# A hand run and the nightly run both rewrite the root's pins and install
+# into its store; two at once interleave. The second one stops and says who
+# holds the root. A lock whose holder is gone (killed, or the machine went
+# down under it) is taken over; one with no process id yet is given a second
+# to write it.
+take_lock() {
+  local holder
+  mkdir -p "$ROOT"
+  if ! mkdir "$LOCK" 2>/dev/null; then
+    holder="$(cat "$LOCK/pid" 2>/dev/null || true)"
+    if [ -z "$holder" ]; then
+      sleep 1
+      holder="$(cat "$LOCK/pid" 2>/dev/null || true)"
+    fi
+    if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+      # The directory is named: the process id of a run that was killed
+      # comes round to another program, which then holds every later run.
+      err "another limen-install is running on $ROOT (process $holder): run this again when it has ended; if that process is not one, remove $LOCK"
+      exit 1
+    fi
+    rm -rf "$LOCK"
+    if ! mkdir "$LOCK" 2>/dev/null; then
+      err "another limen-install took $ROOT just now: run this again when it has ended"
+      exit 1
+    fi
+  fi
+  LOCK_HELD=1
+  echo "$$" > "$LOCK/pid"
+}
 
 verify_sha256() {  # $1=file $2=expected
   # No single digest tool exists everywhere: linux and windows git-bash ship
@@ -134,6 +186,7 @@ install_hermetic() {
   fi
   log "installing hermetic ${HERMETIC_VERSION} (${asset})"
   local t; t="$(mktemp -d "${TMPDIR:-/tmp}/limen-install.XXXXXX")"
+  SCRATCH+=("$t")
   local base="https://github.com/forkcloser/hermetic/releases/download/${HERMETIC_VERSION}"
   # Every download is bounded: a connection that stalls would otherwise hold
   # the run for ever, and under launchd a run that never ends is the last one,
@@ -213,17 +266,22 @@ preflight_writes() {
 # the actual custom path. Appended last, so it comes first on PATH, ahead of
 # an aqua bin a previous installer put there.
 ensure_shell_config() {
-  local rc path_value
+  local rc path_value path_word
   rc="$(shell_rc)"
+  # The default root is an expression the shell expands at startup, so it
+  # goes inside double quotes; a preset root is a path as it is, and goes in
+  # as a quoted word, since it may hold what double quotes would expand.
   path_value="$ROOT_EXPR/bin"
+  path_word="\"$path_value:\$PATH\""
   if [ -n "$HERMETIC_ROOT_DIR_PRESET" ]; then
     path_value="$HERMETIC_ROOT_DIR_PRESET/bin"
+    path_word="$(sh_quote "$path_value"):\"\$PATH\""
   fi
   # Guard with the exact literal we write (grep -F): a looser hand-written
   # pattern silently never matches and the line gets re-appended on every run.
-  if ! grep -qF "$path_value" "$rc" 2>/dev/null; then
-    # shellcheck disable=SC2016
-    printf '\n# hermetic\nexport PATH="%s:$PATH"\n' "$path_value" >> "$rc"
+  # The path as it is covers the line an earlier version wrote for it.
+  if ! grep -qF -e "$path_value" -e "$path_word" "$rc" 2>/dev/null; then
+    printf '\n# hermetic\nexport PATH=%s\n' "$path_word" >> "$rc"
     SHELL_CHANGED=1
   fi
   # The previous installer's three lines are the human's to remove (the
@@ -614,16 +672,19 @@ install_nightly() {
 
   # A preset root travels into the runner, since launchd sources no rc; the
   # default root is the binary's own and needs no variable.
-  local root_export=""
+  local root_export="" log_word last_word
   if [ -n "$HERMETIC_ROOT_DIR_PRESET" ]; then
-    root_export="export HERMETIC_ROOT_DIR=\"$HERMETIC_ROOT_DIR_PRESET\""
+    root_export="export HERMETIC_ROOT_DIR=$(sh_quote "$HERMETIC_ROOT_DIR_PRESET")"
   fi
+  log_word="$(sh_quote "$NIGHTLY_LOG")"
+  last_word="$(sh_quote "$NIGHTLY_LAST")"
 
   # Written beside and moved into place: the nightly run is this very runner,
   # still being read by its shell, and a longer text written over it would be
   # executed from the wrong offset.
   local runner
   runner="$(mktemp "${NIGHTLY_RUNNER%/*}/.nightly.XXXXXX")"
+  SCRATCH+=("$runner")
   cat > "$runner" <<RUNNER
 #!/bin/sh
 # Written by limen-install; overwritten on each run. The nightly job: fetch
@@ -634,7 +695,7 @@ set -eu
 PATH=/usr/bin:/bin:/usr/sbin:/sbin
 export PATH
 # The log is launchd's open file: trimmed in place, never replaced.
-log="$NIGHTLY_LOG"
+log=$log_word
 if [ -f "\$log" ] && [ "\$(wc -c < "\$log")" -gt 1048576 ]; then
   tail -c 262144 "\$log" > "\$log.trim" && cat "\$log.trim" > "\$log" && rm -f "\$log.trim"
 fi
@@ -649,7 +710,7 @@ tag=\${url##*/}
 # a release object for an older tag is published, and marked latest, by any
 # account that may write to the repository: without this the job would take
 # the machine back to that tag's pins.
-last="$NIGHTLY_LAST"
+last=$last_word
 # older <a> <b>: release a comes before release b.
 older() {
   [ "\$1" != "\$2" ] && [ "\$(printf '%s\n%s\n' "\${1#v}" "\${2#v}" | sort -t. -k1,1n -k2,2n -k3,3n | head -n 1)" = "\${1#v}" ]
@@ -696,6 +757,7 @@ RUNNER
 
   local plist
   plist="$(mktemp "${TMPDIR:-/tmp}/limen-install.plist.XXXXXX")"
+  SCRATCH+=("$plist")
   cat > "$plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -706,7 +768,7 @@ RUNNER
   <key>ProgramArguments</key>
   <array>
     <string>/bin/sh</string>
-    <string>$NIGHTLY_RUNNER</string>
+    <string>$(xml_escape "$NIGHTLY_RUNNER")</string>
   </array>
   <key>StartCalendarInterval</key>
   <dict>
@@ -716,9 +778,9 @@ RUNNER
     <integer>$NIGHTLY_MINUTE</integer>
   </dict>
   <key>StandardOutPath</key>
-  <string>$NIGHTLY_LOG</string>
+  <string>$(xml_escape "$NIGHTLY_LOG")</string>
   <key>StandardErrorPath</key>
-  <string>$NIGHTLY_LOG</string>
+  <string>$(xml_escape "$NIGHTLY_LOG")</string>
 </dict>
 </plist>
 PLIST
@@ -752,6 +814,7 @@ PLIST
 }
 
 preflight_writes
+take_lock
 install_hermetic
 ensure_shell_config
 write_config
