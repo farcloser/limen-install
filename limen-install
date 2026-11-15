@@ -18,11 +18,14 @@ set -euo pipefail
 # XDG_DATA_HOME at shell startup (and survives dotfile syncs across machines)
 # instead of freezing today's absolute paths. The script evaluates it for its
 # own use. On Windows (git-bash) the binary roots at %LOCALAPPDATA%, which
-# git-bash inherits, so the expression follows the variable wherever it points.
+# git-bash inherits, so the expression follows the variable wherever it points,
+# and names the result as git-bash does: %LOCALAPPDATA% is a Windows path, and
+# in PATH the colon of its drive ends an entry, leaving a path with no drive
+# that only resolves while the shell stands on that one.
 case "$OSTYPE" in
   msys*|cygwin*)
     # shellcheck disable=SC2016
-    ROOT_EXPR='${HERMETIC_ROOT_DIR:-${LOCALAPPDATA:-$HOME/AppData/Local}/hermetic}' ;;
+    ROOT_EXPR='$(cygpath -u "${HERMETIC_ROOT_DIR:-${LOCALAPPDATA:-$HOME/AppData/Local}/hermetic}")' ;;
   darwin*)
     # shellcheck disable=SC2016
     ROOT_EXPR='${HERMETIC_ROOT_DIR:-$HOME/Library/Application Support/hermetic}' ;;
@@ -34,8 +37,10 @@ readonly ROOT_EXPR
 ROOT="$(eval "echo \"$ROOT_EXPR\"")"
 readonly ROOT
 # The preset is remembered: when set, the rc and the nightly runner carry the
-# actual custom path, since the default expression would point elsewhere.
-HERMETIC_ROOT_DIR_PRESET="${HERMETIC_ROOT_DIR:-}"
+# actual custom path, since the default expression would point elsewhere. As
+# the root reads it: the same text, but on Windows, where it is git-bash's
+# name for it.
+HERMETIC_ROOT_DIR_PRESET="${HERMETIC_ROOT_DIR:+$ROOT}"
 readonly HERMETIC_ROOT_DIR_PRESET
 # Where the next pins are written and their checksums computed, before any
 # of them is moved into the root: under it, so that the move is a rename.

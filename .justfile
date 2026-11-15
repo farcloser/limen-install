@@ -308,17 +308,31 @@ smoke:
         echo "limen-install: the stage of the pins or the root's lock outlives the run" >&2
         exit 1
     fi
-    grep -qF '/hermetic}/bin' "$home/.bashrc"
+    grep -qF '/hermetic}")/bin' "$home/.bashrc"
     # limen and gh through their links, from a directory with no project, and
     # the one PATH entry as the next git-bash finds it: a login shell, which
-    # reads the rc the run appended to, with no other way to the root's bin.
-    # Each is tried whatever the one before it did: a red leg says all three.
+    # reads the rc the run appended to, with no other way to the root's bin,
+    # where it starts and once it has moved to the checkout, which on a
+    # runner is on another drive than the home.
+    # Each is tried whatever the one before it did: a red leg says them all.
     echo "limen-install.ps1: the root's bin, $root/bin, holds: $(cd "$root/bin" && echo *)"
     bad=0
     machine "$root/bin:/usr/bin:/bin" limen version || { echo "limen-install: limen does not run through its link in the root's bin" >&2; bad=1; }
     machine "$root/bin:/usr/bin:/bin" gh --version > /dev/null || { echo "limen-install: gh does not run through its link in the root's bin" >&2; bad=1; }
     machine "/usr/bin:/bin" bash -l -c 'limen version' || { echo "limen-install: limen is not on the PATH of a new git-bash after the run" >&2; bad=1; }
+    # shellcheck disable=SC2016 # the new shell's own argument
+    machine "/usr/bin:/bin" bash -l -c 'cd "$1" && command -v limen' new-shell "$PWD" || { echo "limen-install: limen is not on the PATH of a new git-bash once it is in $PWD" >&2; bad=1; }
     [ "$bad" = 0 ]
+    # The root as the script reads it, on its own lines from the first to the
+    # one that keeps a preset: Windows' name for it goes in, on any drive,
+    # and git-bash's comes out, for the default root and for a preset one.
+    # shellcheck disable=SC2016 # the lifted script's own variables
+    { sed -n '1,/^readonly HERMETIC_ROOT_DIR_PRESET$/p' limen-install; printf '%s\n' 'printf "%s|%s\n" "$ROOT" "$HERMETIC_ROOT_DIR_PRESET"'; } > "$home/names"
+    grep -qx 'readonly HERMETIC_ROOT_DIR_PRESET' "$home/names" || { echo "limen-install: the line that keeps a preset root was not found" >&2; exit 1; }
+    named=$(unset HERMETIC_ROOT_DIR; LOCALAPPDATA='D:\some\place' bash "$home/names")
+    [ "$named" = '/d/some/place/hermetic|' ] || { echo "limen-install: the default root, with LOCALAPPDATA on D:, reads: $named" >&2; exit 1; }
+    named=$(HERMETIC_ROOT_DIR='D:\some\root' bash "$home/names")
+    [ "$named" = '/d/some/root|/d/some/root' ] || { echo "limen-install: a preset root on D: reads: $named" >&2; exit 1; }
     # --status on the root the install just made.
     machine "/usr/bin:/bin" bash "$PWD/limen-install" --status > "$home/status" 2>&1 || { echo "limen-install: --status did not end well on the root the install made:" >&2; cat "$home/status" >&2; exit 1; }
     for line in "pins: the root holds this script's" 'nightly job: none on this platform'; do
