@@ -618,7 +618,45 @@ git-plan:
         cat "$scratch/said" >&2
         exit 1
     fi
-    echo "limen-install.ps1: which Git a run takes, how a version reads, the installer verified, and no machine-wide install without elevation, ok"
+    # A download that curl gives up on ends the run, and says so. A stand-in
+    # for curl, built by PowerShell, keeps its arguments and ends as told (28
+    # is curl's own code for a time limit reached): the limits must be among
+    # them, since no test can make github.com stall, and no option may be one
+    # the curl of an old Windows ends on, since no runner has that curl. A
+    # Windows with no curl at all ends the run too, in the script's own words.
+    cat > "$scratch/stand-in.ps1" <<'PS'
+    Add-Type -OutputType ConsoleApplication -OutputAssembly $args[0] -TypeDefinition 'public static class StandIn { public static int Main(string[] arguments) { System.IO.File.WriteAllText(System.Environment.GetEnvironmentVariable("CURL_SEEN"), string.Join(" ", arguments)); return int.Parse(System.Environment.GetEnvironmentVariable("CURL_ENDS")); } }'
+    PS
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w "$scratch/stand-in.ps1")" "$(cygpath -w "$scratch/curl.exe")"
+    {
+        # shellcheck disable=SC2016 # the script's own line, looked for as it is written
+        sed '/^\$plan = Select-Git /,$d' limen-install.ps1
+        # shellcheck disable=SC2016 # PowerShell's own variables
+        printf '%s\n' '$Curl = $args[0]' "Get-GitAsset 'PortableGit'" 'exit 0'
+    } > "$scratch/fetch.ps1"
+    code=0
+    CURL_SEEN="$(cygpath -w "$scratch/seen")" CURL_ENDS=28 powershell.exe -NoProfile -ExecutionPolicy Bypass \
+        -File "$(cygpath -w "$scratch/fetch.ps1")" "$(cygpath -w "$scratch/curl.exe")" > "$scratch/said" 2>&1 || code=$?
+    if [ "$code" != 1 ] || ! grep -qF 'download failed (curl exit code 28)' "$scratch/said"; then
+        echo "limen-install.ps1: a download curl gave up on ended $code and said:" >&2
+        cat "$scratch/said" >&2
+        exit 1
+    fi
+    for word in '--proto =https' '--connect-timeout 20' '--max-time 900' '--retry 5' '--retry-max-time 900' 'https://github.com/git-for-windows/git/releases/download/v'; do
+        grep -qF -- "$word" "$scratch/seen" || { echo "limen-install.ps1: curl was not given \`$word\`: $(cat "$scratch/seen")" >&2; exit 1; }
+    done
+    if grep -qF -- '--retry-all-errors' "$scratch/seen"; then
+        echo "limen-install.ps1: curl was given --retry-all-errors, which the curl of an old Windows does not know: $(cat "$scratch/seen")" >&2
+        exit 1
+    fi
+    code=0
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w "$scratch/fetch.ps1")" "$(cygpath -w "$scratch/no-curl.exe")" > "$scratch/said" 2>&1 || code=$?
+    if [ "$code" != 1 ] || ! grep -qF 'this Windows has no curl.exe' "$scratch/said" || grep -qF 'downloading' "$scratch/said"; then
+        echo "limen-install.ps1: a download on a Windows with no curl ended $code and said:" >&2
+        cat "$scratch/said" >&2
+        exit 1
+    fi
+    echo "limen-install.ps1: which Git a run takes, how a version reads, the installer verified, no machine-wide install without elevation, and a download that fails, ok"
 
 [unix]
 git-plan:

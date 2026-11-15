@@ -55,6 +55,9 @@ $SystemGit = Join-Path $env:ProgramFiles 'Git'
 $Mark = Join-Path $SystemGit '.limen-install'
 # This script's own Git, on a machine whose Git is someone else's.
 $OwnGit = Join-Path $env:LOCALAPPDATA 'limen-install\Git'
+# Windows' own curl, by its path: in Windows PowerShell the bare name is an
+# alias of Invoke-WebRequest, which has no limit on a transfer as a whole.
+$Curl = Join-Path $env:SystemRoot 'System32\curl.exe'
 
 # The MACHINE architecture, not the process one: $env:PROCESSOR_ARCHITECTURE
 # reports AMD64 inside an x64-emulated process on arm64 Windows (e.g. anything
@@ -116,9 +119,22 @@ function Get-GitAsset($kind) {
     $asset = "$kind-$named-$bits.$ending"
     $file = Join-Path $env:TEMP $asset
 
+    if (-not (Test-Path $Curl)) {
+        Err "this Windows has no curl.exe, which this script downloads with (looked for $Curl)"
+        exit 1
+    }
+    # Bounded: no attempt lasts past --max-time, and none starts past
+    # --retry-max-time. Not --retry-all-errors, which the bash installer
+    # gives its own curl: the curl of a Windows that was not updated since
+    # it was installed does not know the option, and ends before any transfer.
     Log "downloading $asset"
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    Invoke-WebRequest -Uri "https://github.com/git-for-windows/git/releases/download/$GitTag/$asset" -OutFile $file -UseBasicParsing
+    & $Curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 20 --max-time 900 `
+        --retry 5 --retry-delay 3 --retry-connrefused --retry-max-time 900 `
+        -o $file "https://github.com/git-for-windows/git/releases/download/$GitTag/$asset"
+    if ($LASTEXITCODE -ne 0) {
+        Err "download failed (curl exit code $LASTEXITCODE): $asset"
+        exit 1
+    }
 
     $actual = (Get-FileHash -Algorithm SHA256 -Path $file).Hash.ToLowerInvariant()
     if ($actual -ne $GitSha256["$kind-$bits.$ending"]) {
