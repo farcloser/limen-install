@@ -37,6 +37,9 @@ readonly ROOT
 # actual custom path, since the default expression would point elsewhere.
 HERMETIC_ROOT_DIR_PRESET="${HERMETIC_ROOT_DIR:-}"
 readonly HERMETIC_ROOT_DIR_PRESET
+# Where the next pins are written and their checksums computed, before any
+# of them is moved into the root: under it, so that the move is a rename.
+readonly STAGE="$ROOT/.pins"
 
 # Every tool this script runs is the system's, for the whole run. On a machine
 # that already has the toolset, cat, mkdir, mktemp, rm, curl and the rest of
@@ -223,12 +226,26 @@ ensure_shell_config() {
   fi
 }
 
+# A file written whole beside its place and renamed into it: a reader finds
+# the old file or the new one, never a truncated one.
+put() {  # $1=target, the content on stdin
+  local staged
+  staged="$(mktemp "${1%/*}/.${1##*/}.XXXXXX")"
+  cat > "$staged"
+  mv -f "$staged" "$1"
+}
+
+# The next pins, staged: nothing in the root changes here. A stage a killed
+# run left is the first thing removed.
+#
 # Renovate bumps the pins below, grouped with aqua.yaml's — do not hand-edit
 # them out of step.
 write_config() {
   mkdir -p "$ROOT"
+  rm -rf "$STAGE"
+  mkdir "$STAGE"
 
-  cat > "$ROOT/hermetic.yaml" <<'YAML'
+  cat > "$STAGE/hermetic.yaml" <<'YAML'
 ---
 # The toolset's pins: limen, the project scaffolder, gh, which limen's github
 # subcommands run, OpenSSH with security keys built in, and taciturn, the
@@ -255,7 +272,7 @@ YAML
   # The registry entry mirrors what goreleaser publishes: per-platform tar.gz
   # archives named limen_<version>_<os>_<arch>.tar.gz plus a checksums.txt that
   # the checksums are pinned from (see update-checksum below).
-  cat > "$ROOT/registry.yaml" <<'YAML'
+  cat > "$STAGE/registry.yaml" <<'YAML'
 ---
 # Written by limen-install; edits are overwritten on the next run.
 packages:
@@ -414,7 +431,9 @@ packages:
       - darwin/arm64
 YAML
 
-  cat > "$ROOT/policy.yaml" <<'YAML'
+  # Not under its own name: hermetic takes a policy.yaml beside the config it
+  # is given for a project's policy, to be allowed before it counts.
+  cat > "$STAGE/root-policy.yaml" <<'YAML'
 ---
 # Written by limen-install; edits are overwritten on the next run.
 registries:
@@ -425,7 +444,6 @@ packages:
   - registry: farcloser
 YAML
 
-  ok "toolset pins written: ${ROOT} (hermetic.yaml, registry.yaml, policy.yaml)"
 }
 
 # The toolset into the root's store, and the links into the root's bin. The
@@ -433,9 +451,28 @@ YAML
 # .hermetic/hermetic.yaml, never for this file, and update-checksum without
 # a named config writes nothing. --log-level warn: the install lines are
 # noise on a nightly log; a failure is still printed and ends the run.
+#
+# The root is read while this runs (the sessions' tool root links to its pin
+# files, limen-install-agent), so it never holds pins without their
+# checksums. update-checksum writes aqua-checksums.json beside the config it
+# is given, over the file itself and after its downloads: it runs on the
+# stage, first without --prune, which gives the checksums of the old pins
+# and the new ones together. Those go in before the pins and are pruned
+# after, and each file goes in by a rename.
 install_tools() {
   local h; h="$(hermetic_bin)"
-  "$h" --log-level warn -c "$ROOT/hermetic.yaml" update-checksum --prune
+  if [ -f "$ROOT/aqua-checksums.json" ]; then
+    cp "$ROOT/aqua-checksums.json" "$STAGE/aqua-checksums.json"
+  fi
+  "$h" --log-level warn -c "$STAGE/hermetic.yaml" update-checksum
+  put "$ROOT/aqua-checksums.json" < "$STAGE/aqua-checksums.json"
+  put "$ROOT/registry.yaml" < "$STAGE/registry.yaml"
+  put "$ROOT/policy.yaml" < "$STAGE/root-policy.yaml"
+  put "$ROOT/hermetic.yaml" < "$STAGE/hermetic.yaml"
+  ok "toolset pins written: ${ROOT} (hermetic.yaml, registry.yaml, policy.yaml, aqua-checksums.json)"
+  "$h" --log-level warn -c "$STAGE/hermetic.yaml" update-checksum --prune
+  put "$ROOT/aqua-checksums.json" < "$STAGE/aqua-checksums.json"
+  rm -rf "$STAGE"
   "$h" --log-level warn -c "$ROOT/hermetic.yaml" install -a
   ok "scaffolder ready: $(limen version 2>/dev/null || echo 'open a new shell, then run: limen version')"
 }

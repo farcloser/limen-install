@@ -190,11 +190,17 @@ What it does (idempotent — re-run to converge):
   cache under `$HOME/.sigstore` and reads no other variable) into the root; the
   sandbox's write list becomes the root plus any `--write` directories, and the
   human's tool roots, Go caches, cargo and sigstore cache leave it. The sessions'
-  hermetic root gets the toolset's pins, copied from the machine's root, and a
-  `bin/hermetic` that is a symlink to the machine's binary, never a copy: every
-  link hermetic plants in a root's `bin` points at that root's `bin/hermetic`, it
-  links nothing into a root that has none, and the symlink follows the nightly
-  bump where a copy stays the version of the day. Nothing per repository: a
+  hermetic root gets the toolset's pins and a `bin/hermetic`, each a symlink to
+  the machine root's own file, never a copy: nothing runs this script at night,
+  so a copy stays the pin of the day it was made while the machine's moves, and
+  a symlink follows the nightly bump. `limen-install` moves each of those files
+  in by a rename, the checksums of new pins before the pins themselves, so a
+  session reads an old file or a new one, never a truncated one and never pins
+  without their checksums. Run from a shell whose hermetic root is already the
+  sessions' (a session's own shell), the script refuses: the links would point
+  at themselves. Every link hermetic plants in a root's `bin` points at that
+  root's `bin/hermetic`, and it links nothing into a root that has none.
+  Nothing per repository: a
   session approves a checkout's policy and installs its pins itself, into the
   root. A session's `PATH` is left alone: the harness writes
   its own process `PATH` into the shell snapshot as a literal, so no rc file can
