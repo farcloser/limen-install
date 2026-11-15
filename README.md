@@ -98,6 +98,21 @@ nightly one is at work, or the other way round, stops and names the process that
 root, and a lock whose holder is gone is taken over. Linux and Windows get no job yet: run
 the script by hand there.
 
+A job that fails at night says so nowhere a person looks, so the runner writes down how
+each run ended (`~/.local/share/limen-install/last-run`: the time, the release, the exit
+code), and the script reports it:
+
+```bash
+./limen-install --status
+```
+
+`--status` writes nothing. It says whether the root holds the pins of the script that was
+run (so, run from the latest release's script, whether this machine is current), whether
+the nightly job is loaded, and how its last run ended, and it ends 1 when there is
+something to look at: a pin file that differs, a job that is not loaded, a run that
+failed, a last run two days old or more, or no run recorded two days after the job was
+installed.
+
 ## Versioning
 
 A tag is a version of this repository, on its own line: the script, the nightly
