@@ -4,7 +4,7 @@ import '.limen/just/main.just'
 
 lint: do::lint::default
 fix: do::fix::default
-test: installer-checksum smoke pin-write farclauder merge-settings agent-root
+test: installer-checksum smoke pin-write agent-put farclauder merge-settings agent-root
 
 # --- added by limen fix: the recipe the security workflow runs ---
 security: do::security::default
@@ -263,6 +263,46 @@ pin-write:
 pin-write:
     @echo "pin-write: unix only, as the bash harness it runs limen-install's functions in"
 
+# `put`, as limen-install-agent writes every file a session reads or runs:
+# the function lifted from the script. A hard link to the old file keeps the
+# old bytes when the new one is renamed in, and reads the new ones when the
+# file is written over.
+[unix]
+agent-put:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    scratch=$(mktemp -d "${TMPDIR:-/tmp}/agent-put.XXXXXX")
+    trap 'rm -rf "$scratch"' EXIT
+    harness="$scratch/harness"
+    target="$scratch/a directory/the file"
+    mkdir -p "${target%/*}"
+    {
+        printf 'set -euo pipefail\n'
+        sed -n '/^put() {/,/^}$/p' limen-install-agent
+        # shellcheck disable=SC2016 # the harness's own arguments
+        printf '%s\n' 'put "$1" "$2"'
+    } > "$harness"
+    grep -q '^put() {' "$harness" || { echo "agent-put: \`put() {\` not found in limen-install-agent" >&2; exit 1; }
+    printf 'old\n' > "$target"
+    chmod 0644 "$target"
+    ln "$target" "$scratch/witness"
+    printf 'new\n' | bash "$harness" 0755 "$target"
+    [ "$(cat "$target")" = new ] || { echo "agent-put: the file reads \`$(cat "$target")\`" >&2; exit 1; }
+    [ "$(cat "$scratch/witness")" = old ] || { echo "agent-put: the file was written over, not renamed in" >&2; exit 1; }
+    [ -n "$(find "$target" -maxdepth 0 -perm 755)" ] || { echo "agent-put: the file is not 0755, the mode asked for" >&2; exit 1; }
+    [ "$(find "${target%/*}" -mindepth 1 | wc -l | tr -d ' ')" = 1 ] || { echo "agent-put: something staged was left:" >&2; find "${target%/*}" -mindepth 1 >&2; exit 1; }
+    echo "renames: new content into place with its mode, nothing staged left"
+    printf 'first\n' | bash "$harness" 0600 "${target%/*}/another"
+    if [ "$(cat "${target%/*}/another")" != first ] || [ -z "$(find "${target%/*}/another" -maxdepth 0 -perm 600)" ]; then
+        echo "agent-put: a file that was not there is not written, or not 0600" >&2
+        exit 1
+    fi
+    echo "creates: a file that was not there"
+
+[windows]
+agent-put:
+    @echo "agent-put: unix only, as the bash harness it runs limen-install-agent's function in"
+
 # farclauder, as limen-install-agent writes it, run against throwaway clones:
 # it removes a worktree, checkout and record, and refuses everything else: a
 # locked worktree, a record that names another path, a symlink on the way, a
@@ -275,7 +315,7 @@ farclauder:
     trap 'rm -rf "$scratch"' EXIT
     scratch=$(cd -P "$scratch" && pwd -P)
     tool="$scratch/farclauder"
-    sed -n "/^  cat > \"\$FARCLAUDER\" <<'SH'$/,/^SH$/p" limen-install-agent | sed '1d;$d' > "$tool"
+    sed -n "/^  put 0755 \"\$FARCLAUDER\" <<'SH'$/,/^SH$/p" limen-install-agent | sed '1d;$d' > "$tool"
     chmod 755 "$tool"
     [ -s "$tool" ] || { echo "farclauder: not found in limen-install-agent" >&2; exit 1; }
     clone() { # clone <repo> <name> [live]: a clone with one registered worktree
@@ -432,10 +472,34 @@ merge-settings:
     cp "$settings" "$scratch/before"
     twice kept
     echo "merges: a human's settings file, keeping what is theirs and dropping what the installer retired"
+    # A file only its owner reads, with no backup yet, and a hard link to it:
+    # the link keeps the old bytes when the merged file is renamed in, and
+    # reads the new ones when it is written over.
     rm -rf "$home" && mkdir -p "$home/.claude" && cp "$scratch/before" "$settings"
+    chmod 0600 "$settings"
+    ln "$settings" "$scratch/witness"
     bash "$harness"
     cmp -s "$settings.bak" "$scratch/before" || { echo "merge-settings: the backup is not the file as it was" >&2; exit 1; }
     echo "keeps: the file as it was, beside the merged one"
+    cmp -s "$scratch/witness" "$scratch/before" || { echo "merge-settings: the settings file was written over, not renamed in" >&2; exit 1; }
+    for f in "$settings" "$settings.bak"; do
+        [ -n "$(find "$f" -maxdepth 0 -perm 600)" ] || { echo "merge-settings: $f is not 0600 after the merge of a file that was" >&2; exit 1; }
+    done
+    echo "renames: the merged file into place, it and a first backup with the old file's mode"
+    # A settings file that does not parse: nothing is written, and the backup
+    # of the last file that did is still there.
+    cp "$settings.bak" "$scratch/good-backup"
+    printf '{ "env": ' > "$settings"
+    cp "$settings" "$scratch/broken"
+    if bash "$harness" 2> "$scratch/err"; then
+        echo "merge-settings: a settings file that is not JSON was merged" >&2
+        exit 1
+    fi
+    cmp -s "$settings.bak" "$scratch/good-backup" || { echo "merge-settings: a broken settings file replaced the backup" >&2; exit 1; }
+    cmp -s "$settings" "$scratch/broken" || { echo "merge-settings: a broken settings file was rewritten" >&2; exit 1; }
+    grep -qF 'is not JSON' "$scratch/err" || { echo "merge-settings: the refusal does not say why:" >&2; cat "$scratch/err" >&2; exit 1; }
+    [ ! -e "$settings.new" ] || { echo "merge-settings: a staged settings file was left behind" >&2; exit 1; }
+    echo "refuses: a settings file that does not parse, the backup untouched"
 
 [windows]
 merge-settings:

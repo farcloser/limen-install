@@ -140,9 +140,21 @@ readonly AGENT_HERMETIC="$AGENT_ROOT/hermetic" AGENT_HOME="$AGENT_ROOT/home"
 readonly SESSION_SSH_CONFIG="$AGENT_ROOT/ssh_config"
 readonly AGENT_FORK_GLOB="$AGENT_HERMETIC/store/pkgs/github_release/github.com/forkcloser/openssh/*/*/*/bin"
 
+# A file written whole beside its place and renamed into it, with its mode:
+# sessions read these files and run these scripts while this runs, and one
+# rewritten in place is, for the time of the write, an empty config or a
+# script read from the wrong offset.
+put() {  # $1=mode $2=target, the content on stdin
+  local staged
+  staged="$(mktemp "${2%/*}/.${2##*/}.XXXXXX")"
+  cat > "$staged"
+  chmod "$1" "$staged"
+  mv -f "$staged" "$2"
+}
+
 install_helper() {
   mkdir -p "$CLAUDE_HOME/bin"
-  cat > "$HELPER" <<'PY'
+  put 0755 "$HELPER" <<'PY'
 #!/usr/bin/env python3
 """ssh ProxyCommand for the Claude Code sandbox: an authenticated HTTP CONNECT tunnel.
 
@@ -230,12 +242,11 @@ if __name__ == "__main__":
     except (BrokenPipeError, ConnectionResetError):
         pass
 PY
-  chmod 0755 "$HELPER"
   ok "ProxyCommand helper: $HELPER"
 
   # ssh-keygen -Y sign reaches the agent only through SSH_AUTH_SOCK, and git
   # execs gpg.ssh.program directly — so the socket is pinned in a wrapper.
-  cat > "$SIGNER" <<SH
+  put 0755 "$SIGNER" <<SH
 #!/bin/sh
 # Written by limen-install-agent: the fork's ssh-keygen (forkcloser/openssh, the
 # machine toolset's pin, by real path) with the agent socket pinned, because the
@@ -244,7 +255,6 @@ SSH_AUTH_SOCK='$AGENT_SOCKET'
 export SSH_AUTH_SOCK
 exec '$FORK_KEYGEN' "\$@"
 SH
-  chmod 0755 "$SIGNER"
   ok "signing wrapper: $SIGNER"
 }
 
@@ -258,7 +268,7 @@ SH
 # session's environment, and every tool is called by absolute path.
 install_farclauder() {
   mkdir -p "$CLAUDE_HOME/bin"
-  cat > "$FARCLAUDER" <<'SH'
+  put 0755 "$FARCLAUDER" <<'SH'
 #!/bin/bash -p
 # farclauder worktree remove <path>
 #   Removes a worktree under a clone's .claude/worktrees, checkout and record
@@ -317,21 +327,24 @@ case "${1:-} ${2:-}" in
   *) die "usage: farclauder worktree remove <path>" ;;
 esac
 SH
-  chmod 755 "$FARCLAUDER"
   ok "farclauder installed at $FARCLAUDER"
 }
 
 pin_github_host_keys() {
   # GitHub publishes its host keys at api.github.com/meta; pinned here so the
   # sandbox (denied ~/.ssh) verifies the host strictly, never trust-on-first-use.
-  local meta
+  local meta staged
   meta="$(curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 20 --max-time 60 --retry 5 --retry-delay 3 --retry-all-errors https://api.github.com/meta)"
+  # Staged by hand, not through put: the keys come out of a pipeline, and a
+  # reader of stdin would install whatever came before a failure in it.
+  staged="$(mktemp "$KNOWN_HOSTS.XXXXXX")"
   {
     echo "# GitHub's ssh host keys, from https://api.github.com/meta — written by limen-install-agent."
     echo "# Compare against https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints"
     printf '%s' "$meta" | python3 -c 'import json,sys; [print("github.com", k) for k in json.load(sys.stdin)["ssh_keys"]]'
-  } > "$KNOWN_HOSTS"
-  chmod 0644 "$KNOWN_HOSTS"
+  } > "$staged"
+  chmod 0644 "$staged"
+  mv -f "$staged" "$KNOWN_HOSTS"
   ok "GitHub host keys pinned: $KNOWN_HOSTS ($(grep -c '^github.com ' "$KNOWN_HOSTS") keys)"
 }
 
@@ -392,8 +405,11 @@ install_gitconfig() {
   # needs ssh_config's own double quotes inside the shell's single quotes.
   ssh_command="'$FORK_SSH' -o 'IdentityAgent=\"$AGENT_SOCKET\"' -o IdentitiesOnly=no -o PubkeyAcceptedAlgorithms=$KEY_ALGO -o ProxyCommand='python3 $HELPER %h %p' -o UserKnownHostsFile=$KNOWN_HOSTS -o StrictHostKeyChecking=yes -o ControlMaster=no -o ControlPath=none"
   : > "$GITIGNORE"
-  : > "$GITCONFIG"
-  local g=(git config --file "$GITCONFIG")
+  # Built beside the file and renamed into it: for the time of an in-place
+  # rewrite a session's git would find no identity and no signing key there.
+  local staged
+  staged="$(mktemp "$GITCONFIG.XXXXXX")"
+  local g=(git config --file "$staged")
   "${g[@]}" user.name "$BOT_LOGIN"
   "${g[@]}" user.email "$BOT_EMAIL"
   "${g[@]}" user.signingkey "key::$BOT_KEY"
@@ -413,7 +429,8 @@ install_gitconfig() {
   # bot's gh token; the leading empty helper drops any system default.
   "${g[@]}" --replace-all credential.https://github.com.helper ''
   "${g[@]}" --add credential.https://github.com.helper '!gh auth git-credential'
-  chmod 0644 "$GITCONFIG" "$GITIGNORE"
+  chmod 0644 "$staged" "$GITIGNORE"
+  mv -f "$staged" "$GITCONFIG"
   ok "sessions' git configuration: $GITCONFIG"
 }
 
@@ -421,7 +438,7 @@ install_gitconfig() {
 # refuses an included file that is group- or world-writable, hence the mode.
 install_session_ssh_config() {
   mkdir -p "$(dirname "$SESSION_SSH_CONFIG")"
-  cat > "$SESSION_SSH_CONFIG" <<CONF
+  put 0644 "$SESSION_SSH_CONFIG" <<CONF
 # Written by limen-install-agent: a Claude session's ssh client options,
 # included through SSH_CONFIG_INCLUDE. Rewritten whole on every run.
 IdentityAgent "$AGENT_SOCKET"
@@ -430,21 +447,24 @@ PubkeyAcceptedAlgorithms $KEY_ALGO
 UserKnownHostsFile $KNOWN_HOSTS
 StrictHostKeyChecking yes
 CONF
-  chmod 0644 "$SESSION_SSH_CONFIG"
   ok "sessions' ssh client options: $SESSION_SSH_CONFIG"
 }
 
 merge_settings() {
   mkdir -p "$CLAUDE_HOME"
   [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
-  cp "$SETTINGS" "$SETTINGS.bak"
   SOCKET="$AGENT_SOCKET" GITCONFIG_PATH="$GITCONFIG" FARCLAUDER_PATH="$FARCLAUDER" \
   ROOT="$AGENT_ROOT" WRITE_DIRS="$(printf '%s\n' ${WRITE[@]+"${WRITE[@]}"})" USER_HOME="$HOME" \
   python3 - "$SETTINGS" <<'PY'
-import json, os, string, sys
+import json, os, shutil, string, sys
 path = sys.argv[1]
-with open(path) as f:
-    settings = json.load(f)
+# Read before anything is written: a file that does not parse stops the run
+# with the backup of the last one that did still in place.
+try:
+    with open(path) as f:
+        settings = json.load(f)
+except ValueError as e:
+    sys.exit(f"{path} is not JSON ({e}); nothing written, {path}.bak left as it is")
 env = settings.setdefault("env", {})
 # The git identity used to be a numbered GIT_CONFIG_* block here; it is now the
 # file GIT_CONFIG_GLOBAL names. The numbered keys are the installer's own output
@@ -646,9 +666,18 @@ settings["cleanupPeriodDays"] = 7
 # excludedCommands. The file is left for the human.
 pre = settings.get("hooks", {}).get("PreToolUse", [])
 settings.get("hooks", {})["PreToolUse"] = [h for h in pre if "allow-sandboxed-bash" not in json.dumps(h)] if pre else pre
-with open(path, "w") as f:
+# Whole or not at all: written beside the file, the file as it was kept as
+# the backup, then renamed into place. Claude Code reads this file while it
+# runs.
+staged = path + ".new"
+with open(staged, "w") as f:
     json.dump(settings, f, indent=2)
     f.write("\n")
+shutil.copymode(path, staged)
+# copy, not copyfile: the backup of a file only its owner reads is not made
+# readable by all.
+shutil.copy(path, path + ".bak")
+os.replace(staged, path)
 PY
   ok "Claude Code settings merged: $SETTINGS (backup: $SETTINGS.bak)"
 }
