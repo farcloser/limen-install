@@ -1,6 +1,7 @@
 # Renovate bumps HERMETIC_VERSION in ./limen-install but cannot recompute
-# its sha256 companion, the digest of that release's checksums.txt; this
-# pushes the fix-up onto renovate/**
+# its sha256 companion, the digest of that release's checksums.txt, nor the
+# sha256 of the four Git for Windows assets that follow $GitTag in
+# ./limen-install.ps1; this pushes the fix-up onto renovate/**
 # (the canonical update-aqua-checksum is limen-pinned, byte-for-byte, and
 # cannot carry it). Same construction as that workflow: `push:` on the
 # branch prefix, never pull_request_target; no credential kept by the
@@ -53,21 +54,56 @@ jobs:
           rm -rf "${tmp}"
           sed -i "s/^readonly HERMETIC_CHECKSUMS_SHA256=\".*\"$/readonly HERMETIC_CHECKSUMS_SHA256=\"${sha}\"/" limen-install
 
+      # The step's text is also run by `just git-pins`, against a curl of its
+      # own, on every platform the tests run on: no `sed -i`, whose argument
+      # differs between GNU and BSD.
+      - name: Recompute the sha256 of the Git for Windows assets for the pinned tag
+        run: |
+          tag="$(sed -n "s/^\$GitTag = '\(.*\)'$/\1/p" limen-install.ps1)"
+          [ -n "$tag" ] || { echo "could not extract \$GitTag from ./limen-install.ps1" >&2; exit 1; }
+          # An asset is named after its version, with the build number left
+          # out when it is the first: v2.56.1.windows.1 ships
+          # Git-2.56.1-64-bit.exe, v2.55.0.windows.2 ships Git-2.55.0.2-64-bit.exe.
+          named="$(printf '%s\n' "$tag" | sed -E 's/^v//; s/\.windows\.1$//; s/\.windows\.([0-9]+)$/.\1/')"
+          tmp="$(mktemp -d "${TMPDIR:-/tmp}/git-assets.XXXXXX")"
+          for key in Git-64-bit.exe Git-arm64.exe PortableGit-64-bit.7z.exe PortableGit-arm64.7z.exe; do
+            asset="${key%%-*}-${named}-${key#*-}"
+            curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o "${tmp}/${asset}" \
+              "https://github.com/git-for-windows/git/releases/download/${tag}/${asset}"
+            sha="$(sha256sum "${tmp}/${asset}" | cut -d' ' -f1)"
+            rm -f "${tmp}/${asset}"
+            # A key the script no longer carries would leave its checksum
+            # behind in silence: the line is looked for once rewritten.
+            sed "s/^\(    '${key}' *= *\)'[0-9a-f]*'$/\1'${sha}'/" limen-install.ps1 > "${tmp}/script"
+            grep -q "^    '${key}' *= *'${sha}'$" "${tmp}/script" || { echo "no checksum line for ${key} in ./limen-install.ps1" >&2; exit 1; }
+            cat "${tmp}/script" > limen-install.ps1
+          done
+          rm -rf "${tmp}"
       - name: Commit the update through the API, if any
         id: commit
         env:
           BRANCH: ${{ github.ref_name }}
           TOKEN: ${{ github.token }}
         run: |
-          # The file this workflow owns, never the whole tree: setup-aqua and
+          # The files this workflow owns, never the whole tree: setup-aqua and
           # the link step leave .hermetic/aqua-checksums.json rewritten on a
           # registry bump, and a whole-tree guard then committed this file
           # unchanged, whose push re-fired the workflow, every thirty seconds.
-          git diff --quiet -- limen-install && { echo "installer checksum already in sync"; exit 0; }
-          # One file, one writer: the recompute step above only ever edits
-          # ./limen-install, so the payload is that file. createCommitOnBranch
-          # carries no file mode, and the script's executable bit survives
-          # because the mutation only replaces the blob of an existing path.
+          # Two files, one writer each: a recompute step above only ever edits
+          # its own script, and the payload is the ones that changed.
+          # createCommitOnBranch carries no file mode, and a script's
+          # executable bit survives because the mutation only replaces the
+          # blob of an existing path.
+          additions='[]'
+          for file in limen-install limen-install.ps1; do
+            git diff --quiet -- "${file}" && continue
+            # On a line of its own: a failure inside an argument is not one
+            # the shell stops on, and the commit would carry an empty file.
+            contents="$(base64 -w0 "${file}")"
+            additions="$(jq -c --arg path "${file}" --arg contents "${contents}" \
+              '. + [{path: $path, contents: $contents}]' <<<"${additions}")"
+          done
+          [ "${additions}" != '[]' ] || { echo "installer checksums already in sync"; exit 0; }
           # Signed-off-by: `just do lint commits` enforces DCO on the PR range,
           # bot commits included.
           payload="$(jq -n \
@@ -75,15 +111,15 @@ jobs:
             --arg repository "${GITHUB_REPOSITORY}" \
             --arg branch "${BRANCH}" \
             --arg head "$(git rev-parse HEAD)" \
-            --arg contents "$(base64 -w0 limen-install)" \
+            --argjson additions "${additions}" \
             '{query: $query, variables: {input: {
               branch: {repositoryNameWithOwner: $repository, branchName: $branch},
               expectedHeadOid: $head,
               message: {
-                headline: "chore: recompute the hermetic checksum",
+                headline: "chore: recompute the installer checksums",
                 body: "Signed-off-by: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"
               },
-              fileChanges: {additions: [{path: "limen-install", contents: $contents}]}}}}')"
+              fileChanges: {additions: $additions}}}}')"
           # GraphQL reports failure in-body over HTTP 200, so success is the
           # presence of the new commit oid, never the HTTP status.
           # No --retry and no -L: a mutation guarded by expectedHeadOid, and a

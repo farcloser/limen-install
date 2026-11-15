@@ -4,7 +4,7 @@ import '.limen/just/main.just'
 
 lint: do::lint::default
 fix: do::fix::default
-test: installer-checksum smoke pin-write failure-paths agent-put farclauder merge-settings agent-root
+test: installer-checksum checksum-steps smoke git-plan pin-write failure-paths agent-put farclauder merge-settings agent-root
 
 # --- added by limen fix: the recipe the security workflow runs ---
 security: do::security::default
@@ -31,6 +31,160 @@ installer-checksum:
         exit 1
     fi
     echo "hermetic ${version}: checksums.txt matches the pin"
+
+# The checksum workflow's two steps of its own, lifted from the workflow as
+# they are written and run here, since nothing runs the workflow but a
+# Renovate branch. The step that recomputes the sha256 of the Git for Windows
+# assets runs against a curl that answers each URL with the URL itself: every
+# checksum line must then hold the sha256 of its own asset's URL, for a first
+# build (whose asset leaves the build number out) and for a rebuild, and
+# nothing else in the script may move. The step that commits runs in a
+# throwaway repository against a curl that keeps what it is sent: the commit
+# carries the scripts that changed, and only those, and none is made when
+# none did.
+[unix]
+checksum-steps:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    scratch=$(mktemp -d "${TMPDIR:-/tmp}/checksum-steps.XXXXXX")
+    trap 'rm -rf "$scratch"' EXIT
+    here="$PWD"
+    # The steps run in scratch directories, where no project is found by
+    # walking up: the pinned tools resolve from this repository's pins.
+    export HERMETIC_CONFIG="${HERMETIC_CONFIG:-$here/.hermetic/hermetic.yaml}"
+    # step <name>: the script of the workflow's step of that name.
+    step() {
+        awk -v name="$1" '
+            $0 == "      - name: " name { found = 1; next }
+            found && !body && /^      - / { exit }
+            found && /^        run: \|$/ { body = 1; next }
+            body && !/^          / && !/^$/ { exit }
+            body { sub(/^          /, ""); print }' "$here/.github/workflows/update-installer-checksum.yaml"
+    }
+    {
+        # shellcheck disable=SC2016 # the stand-in's own variables
+        printf '%s\n' 'set -eo pipefail' \
+            'curl() { local out="" url=""; while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift ;; https://*) url="$1" ;; esac; shift; done; [ "${REFUSED:-}" != "${url##*/}" ] || return 22; printf "%s" "$url" > "$out"; }'
+        step 'Recompute the sha256 of the Git for Windows assets for the pinned tag'
+    } > "$scratch/recompute"
+    grep -qF 'limen-install.ps1' "$scratch/recompute" || { echo "limen-install: the step that recomputes the Git for Windows checksums was not found in the workflow" >&2; exit 1; }
+    # at <tag>: a copy of the script pinned to that tag, in a directory of
+    # its own, where the step is then run.
+    at() {
+        rm -rf "$scratch/work"
+        mkdir "$scratch/work"
+        sed "s/^\(\$GitTag = \)'.*'$/\1'$1'/" limen-install.ps1 > "$scratch/work/limen-install.ps1"
+        grep -qxF "\$GitTag = '$1'" "$scratch/work/limen-install.ps1" || { echo "limen-install: no \$GitTag line in limen-install.ps1" >&2; exit 1; }
+    }
+    # rest <script>: the script without its tag and its checksum lines.
+    rest() { grep -v -E "^(\\\$GitTag = |    '(Git|PortableGit)-[^']*' *= )" "$1"; }
+    while read -r tag key asset; do
+        if [ "$key" = Git-64-bit.exe ]; then
+            at "$tag"
+            (cd "$scratch/work" && bash "$scratch/recompute") < /dev/null
+            rest limen-install.ps1 > "$scratch/before"
+            rest "$scratch/work/limen-install.ps1" > "$scratch/after"
+            if ! cmp -s "$scratch/before" "$scratch/after"; then
+                echo "limen-install: at $tag the step moved more than the checksum lines" >&2
+                exit 1
+            fi
+        fi
+        want=$(printf '%s' "https://github.com/git-for-windows/git/releases/download/$tag/$asset" | sha256sum | cut -d' ' -f1)
+        if ! grep -q "^    '$key' *= *'$want'$" "$scratch/work/limen-install.ps1"; then
+            echo "limen-install: at $tag the line of $key does not hold the sha256 of $asset:" >&2
+            grep -F "'$key'" "$scratch/work/limen-install.ps1" >&2 || true
+            exit 1
+        fi
+    done <<'ROWS'
+    v9.8.7.windows.1 Git-64-bit.exe Git-9.8.7-64-bit.exe
+    v9.8.7.windows.1 Git-arm64.exe Git-9.8.7-arm64.exe
+    v9.8.7.windows.1 PortableGit-64-bit.7z.exe PortableGit-9.8.7-64-bit.7z.exe
+    v9.8.7.windows.1 PortableGit-arm64.7z.exe PortableGit-9.8.7-arm64.7z.exe
+    v9.8.7.windows.3 Git-64-bit.exe Git-9.8.7.3-64-bit.exe
+    v9.8.7.windows.3 Git-arm64.exe Git-9.8.7.3-arm64.exe
+    v9.8.7.windows.3 PortableGit-64-bit.7z.exe PortableGit-9.8.7.3-64-bit.7z.exe
+    v9.8.7.windows.3 PortableGit-arm64.7z.exe PortableGit-9.8.7.3-arm64.7z.exe
+    ROWS
+    # What must end the step, and so the job, before anything is committed:
+    # an asset that does not download, a script that lost a checksum line, a
+    # script with no tag.
+    at v9.8.7.windows.1
+    if (cd "$scratch/work" && REFUSED=PortableGit-9.8.7-arm64.7z.exe bash "$scratch/recompute") 2> /dev/null; then
+        echo "limen-install: the step ended well with an asset that did not download" >&2
+        exit 1
+    fi
+    at v9.8.7.windows.1
+    grep -v -F "'Git-arm64.exe'" "$scratch/work/limen-install.ps1" > "$scratch/short" && cat "$scratch/short" > "$scratch/work/limen-install.ps1"
+    if (cd "$scratch/work" && bash "$scratch/recompute") 2> "$scratch/said"; then
+        echo "limen-install: the step ended well on a script with no checksum line for Git-arm64.exe" >&2
+        exit 1
+    fi
+    grep -qF 'no checksum line for Git-arm64.exe' "$scratch/said" || { echo "limen-install: the step does not name the checksum line it did not find: $(cat "$scratch/said")" >&2; exit 1; }
+    at v9.8.7.windows.1
+    # shellcheck disable=SC2016 # the script's own line, looked for as it is written
+    grep -v '^\$GitTag = ' "$scratch/work/limen-install.ps1" > "$scratch/short" && cat "$scratch/short" > "$scratch/work/limen-install.ps1"
+    if (cd "$scratch/work" && bash "$scratch/recompute") 2> /dev/null; then
+        echo "limen-install: the step ended well on a script with no tag" >&2
+        exit 1
+    fi
+    # The commit: a repository holding the two scripts, and a curl that keeps
+    # the request's body and answers as the API does for a commit made.
+    {
+        # shellcheck disable=SC2016 # the stand-in's own variables
+        printf '%s\n' 'set -eo pipefail' \
+            'curl() { while [ $# -gt 0 ]; do case "$1" in -d) printf "%s" "$2" > "$SENT"; shift ;; esac; shift; done; printf "%s" "{\"data\":{\"createCommitOnBranch\":{\"commit\":{\"oid\":\"0123abc\"}}}}"; }' \
+            'base64() { [ -z "${UNENCODED:-}" ] || return 1; command base64 "$@"; }'
+        step 'Commit the update through the API, if any'
+    } > "$scratch/commit"
+    grep -qF 'createCommitOnBranch' "$scratch/commit" || { echo "limen-install: the step that commits was not found in the workflow" >&2; exit 1; }
+    repo="$scratch/repo"
+    mkdir "$repo"
+    cp limen-install limen-install.ps1 "$repo/"
+    git -C "$repo" init -q
+    git -C "$repo" add limen-install limen-install.ps1
+    git -C "$repo" -c user.name=test -c user.email=test@example.com -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -q -m scripts
+    head=$(git -C "$repo" rev-parse HEAD)
+    # committed <file…>: what the step sends once those files have changed:
+    # the paths it commits, in one line, or `none` when it sends nothing.
+    committed() {
+        git -C "$repo" checkout -q -- limen-install limen-install.ps1
+        for file in "$@"; do echo '# moved' >> "$repo/$file"; done
+        rm -f "$scratch/sent" "$scratch/output"
+        (cd "$repo" && SENT="$scratch/sent" BRANCH=renovate/some-branch TOKEN=none GITHUB_REPOSITORY=farcloser/limen-install \
+            GITHUB_OUTPUT="$scratch/output" bash "$scratch/commit") > /dev/null
+        if [ ! -e "$scratch/sent" ]; then
+            echo none
+            return
+        fi
+        jq -r '[.variables.input.fileChanges.additions[].path] | join(" ")' "$scratch/sent"
+    }
+    [ "$(committed)" = none ] || { echo "limen-install: the step committed with nothing changed: $(committed)" >&2; exit 1; }
+    [ ! -s "$scratch/output" ] || { echo "limen-install: the step reports a commit it did not make: $(cat "$scratch/output")" >&2; exit 1; }
+    [ "$(committed limen-install)" = limen-install ] || { echo "limen-install: with limen-install changed, the step committed: $(committed limen-install)" >&2; exit 1; }
+    [ "$(committed limen-install.ps1)" = limen-install.ps1 ] || { echo "limen-install: with limen-install.ps1 changed, the step committed: $(committed limen-install.ps1)" >&2; exit 1; }
+    [ "$(committed limen-install limen-install.ps1)" = 'limen-install limen-install.ps1' ] || { echo "limen-install: with both scripts changed, the step committed: $(committed limen-install limen-install.ps1)" >&2; exit 1; }
+    # The last request, whole: the files as they are in the tree, on the
+    # branch and over the head the step was given, and the commit reported.
+    for file in limen-install limen-install.ps1; do
+        jq -r --arg path "$file" '.variables.input.fileChanges.additions[] | select(.path == $path) | .contents' "$scratch/sent" | base64 -d | cmp -s - "$repo/$file" \
+            || { echo "limen-install: the commit does not carry $file as it is in the tree" >&2; exit 1; }
+    done
+    sent=$(jq -r '.variables.input | "\(.branch.repositoryNameWithOwner) \(.branch.branchName) \(.expectedHeadOid)"' "$scratch/sent")
+    [ "$sent" = "farcloser/limen-install renovate/some-branch $head" ] || { echo "limen-install: the commit was sent to: $sent" >&2; exit 1; }
+    grep -qxF 'oid=0123abc' "$scratch/output" || { echo "limen-install: the step did not report the commit it made" >&2; exit 1; }
+    # A file that cannot be encoded ends the step: nothing is sent, where a
+    # commit would otherwise carry the file empty.
+    rm -f "$scratch/sent"
+    if (cd "$repo" && UNENCODED=1 SENT="$scratch/sent" BRANCH=renovate/some-branch TOKEN=none GITHUB_REPOSITORY=farcloser/limen-install \
+        GITHUB_OUTPUT="$scratch/output" bash "$scratch/commit") > /dev/null 2>&1 || [ -e "$scratch/sent" ]; then
+        echo "limen-install: the step went on to commit a file it could not encode" >&2
+        exit 1
+    fi
+    echo "limen-install: the checksum workflow's steps, ok"
+
+[windows]
+checksum-steps:
+    @echo "limen-install: the checksum workflow's steps are run on unix, where the workflow runs"
 
 # The installer end to end, in a throwaway HOME with the system's tools and
 # nothing of this machine's: hermetic and limen installed into the default
@@ -263,7 +417,14 @@ smoke:
 
 # On Windows the one entry point is limen-install.ps1, run as its header says:
 # it finds Git for Windows, or installs it, and hands off to ./limen-install
-# under git-bash. End to end with a throwaway HOME and LOCALAPPDATA, where
+# under git-bash. A runner's Git is not the script's, so the script keeps its
+# own under LOCALAPPDATA: the portable archive downloaded, verified and
+# extracted for real, used again as it is by the next run, and replaced by a
+# run that finds it older than the pin (a stand-in for git.exe that says so),
+# the runner's Git untouched throughout. The installer of a machine with no
+# Git, or with the script's own machine-wide one, is not run here: a runner
+# has a Git, and `git-plan` fetches and verifies that installer without
+# running it. End to end with a throwaway HOME and LOCALAPPDATA, where
 # git-bash and hermetic take their defaults from, and nothing of the job's
 # toolset: its hermetic, aqua and limen variables are dropped and PATH is
 # Windows' own, since a login git-bash appends the PATH it is started with to
@@ -298,9 +459,37 @@ smoke:
             HOME="$home_windows" LOCALAPPDATA="$local_windows" HERMETIC_GITHUB_TOKEN="$token" PATH="$path" "$@"
         )
     }
-    machine "$system/System32:$system:$system/System32/WindowsPowerShell/v1.0" \
-        powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w "$PWD/limen-install.ps1")" 2>&1 | tee "$home/ran"
-    grep -qF 'handing off to ./limen-install under git-bash' "$home/ran" || { echo "limen-install.ps1: no hand-off to ./limen-install in its output" >&2; exit 1; }
+    tag=$(sed -n "s/^\$GitTag = '\(.*\)'$/\1/p" limen-install.ps1)
+    [ -n "$tag" ] || { echo "limen-install.ps1: no \$GitTag line" >&2; exit 1; }
+    own="$home/AppData/Local/limen-install/Git"
+    theirs="$(cygpath -u "${PROGRAMFILES:-C:\\Program Files}")/Git"
+    theirs_says=$("$theirs/cmd/git.exe" --version)
+    powershell=("$system/System32:$system:$system/System32/WindowsPowerShell/v1.0" powershell.exe -NoProfile -ExecutionPolicy Bypass -File)
+    # run: the script, its output kept. said <text>: the last run said that.
+    run() { machine "${powershell[@]}" "$(cygpath -w "$PWD/limen-install.ps1")" 2>&1 | tee "$home/ran"; }
+    said() { grep -qF -- "$1" "$home/ran"; }
+    # pinned: the script's own Git is there, at the pin, with nothing of an
+    # install left beside it, and the runner's Git is as it was.
+    pinned() {
+        if [ "$("$own/cmd/git.exe" --version)" != "git version ${tag#v}" ]; then
+            echo "limen-install.ps1: the script's own Git says \`$("$own/cmd/git.exe" --version)\`, want ${tag#v}" >&2
+            exit 1
+        fi
+        if [ -e "$own.next" ] || [ -e "$own.last" ]; then
+            echo "limen-install.ps1: an install left its stage or the Git it replaced beside $own" >&2
+            exit 1
+        fi
+        if [ -e "$theirs/.limen-install" ] || [ "$("$theirs/cmd/git.exe" --version)" != "$theirs_says" ]; then
+            echo "limen-install.ps1: the runner's Git was marked or moved: $("$theirs/cmd/git.exe" --version), was $theirs_says" >&2
+            exit 1
+        fi
+    }
+    run
+    for line in "is not this script's: left as it is" 'checksum verified: PortableGit-' 'authenticode verified: ' \
+        "handing off to ./limen-install under git-bash ($local_windows\\limen-install\\Git\\bin\\bash.exe)"; do
+        said "$line" || { echo "limen-install.ps1: a first run on a machine with someone else's Git does not say \`$line\`" >&2; exit 1; }
+    done
+    pinned
     test -s "$root/hermetic.yaml"
     test -s "$root/aqua-checksums.json"
     test -x "$root/bin/hermetic.exe"
@@ -338,7 +527,102 @@ smoke:
     for line in "pins: the root holds this script's" 'nightly job: none on this platform'; do
         grep -qF -- "$line" "$home/status" || { echo "limen-install: --status does not say \`$line\`:" >&2; cat "$home/status" >&2; exit 1; }
     done
+    # The next run finds its own Git at the pin and fetches nothing.
+    run
+    if ! said "git-bash present, this script's own" || said 'downloading'; then
+        echo "limen-install.ps1: a second run did not use its own Git as it was" >&2
+        exit 1
+    fi
+    pinned
+    # Its own Git older than the pin: replaced, over a stage a killed run
+    # left. The stand-in is a program that prints an old version, built by
+    # PowerShell in the place of git.exe.
+    cat > "$home/older.ps1" <<'PS'
+    Add-Type -OutputType ConsoleApplication -OutputAssembly $args[0] -TypeDefinition 'public static class Older { public static void Main() { System.Console.WriteLine("git version 2.0.0.windows.1"); } }'
+    PS
+    rm "$own/cmd/git.exe"
+    machine "${powershell[@]}" "$(cygpath -w "$home/older.ps1")" "$(cygpath -w "$own/cmd/git.exe")"
+    [ "$("$own/cmd/git.exe" --version)" = 'git version 2.0.0.windows.1' ] || { echo "limen-install.ps1: the stand-in for an older Git is not in place" >&2; exit 1; }
+    mkdir "$own.next" && echo left > "$own.next/left"
+    run
+    said 'downloading PortableGit-' || { echo "limen-install.ps1: a run that found its own Git older than the pin fetched nothing" >&2; exit 1; }
+    pinned
     echo "limen-install.ps1: end to end in a throwaway HOME, ok"
+
+# limen-install.ps1's own judgement, lifted from the script: every line of it
+# up to the one where a run starts acting, then rows. Which Git a run installs
+# or uses, from what the machine holds; how a version is read; and the
+# installer for this machine fetched and verified as a run would, then left
+# unrun, since no runner is a machine without Git. Under the PowerShell the
+# script's header names.
+[windows]
+git-plan:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    scratch=$(mktemp -d "${TMPDIR:-/tmp}/git-plan.XXXXXX")
+    trap 'rm -rf "$scratch"' EXIT
+    # shellcheck disable=SC2016 # the script's own line, looked for as it is written
+    grep -q '^\$plan = Select-Git ' limen-install.ps1 || { echo "limen-install.ps1: the line where a run starts acting was not found" >&2; exit 1; }
+    {
+        sed '/^\$plan = Select-Git /,$d' limen-install.ps1
+        cat <<'PS'
+    $Bad = 0
+    function Row($what, $got, $want) {
+        if ("$got" -ne "$want") {
+            Write-Host "XX ${what}: got '$got', want '$want'"
+            $script:Bad = 1
+        }
+    }
+    $at = [version]'2.55.0.2'
+    $below = [version]'2.54.9.9'
+    $above = [version]'2.56.0.1'
+    Row 'no Git on the machine' (Select-Git $false $false $null $null $at) 'install-system'
+    Row 'no Git on the machine, a mark left behind and a Git of the script''s own' (Select-Git $false $true $null $at $at) 'install-system'
+    Row 'the script''s, older than the pin' (Select-Git $true $true $below $null $at) 'install-system'
+    Row 'the script''s, and it does not say its version' (Select-Git $true $true $null $null $at) 'install-system'
+    Row 'the script''s, at the pin' (Select-Git $true $true $at $null $at) 'use-system'
+    Row 'the script''s, newer than the pin' (Select-Git $true $true $above $null $at) 'use-system'
+    Row 'someone else''s and older, none of the script''s own' (Select-Git $true $false $below $null $at) 'install-own'
+    Row 'someone else''s and newer, none of the script''s own' (Select-Git $true $false $above $null $at) 'install-own'
+    Row 'someone else''s, the script''s own older than the pin' (Select-Git $true $false $above $below $at) 'install-own'
+    Row 'someone else''s, the script''s own at the pin' (Select-Git $true $false $below $at $at) 'use-own'
+    Row 'someone else''s, the script''s own newer than the pin' (Select-Git $true $false $below $above $at) 'use-own'
+    Row 'a tag' (ConvertTo-GitVersion 'v2.55.0.windows.2') '2.55.0.2'
+    Row 'what git --version prints' (ConvertTo-GitVersion 'git version 2.56.1.windows.1') '2.56.1.1'
+    Row 'a release candidate' (ConvertTo-GitVersion 'v2.56.0-rc1.windows.1') ''
+    Row 'a Git that is not Git for Windows' (ConvertTo-GitVersion 'git version 2.47.1') ''
+    Row 'nothing' (ConvertTo-GitVersion $null) ''
+    Row 'numbers, not text' ((ConvertTo-GitVersion 'v2.9.0.windows.1') -lt (ConvertTo-GitVersion 'v2.10.0.windows.1')) 'True'
+    Row 'a rebuild is newer than the build' ((ConvertTo-GitVersion 'v2.55.0.windows.1') -lt (ConvertTo-GitVersion 'v2.55.0.windows.2')) 'True'
+    Row 'a runner is elevated, and the script sees it' (Test-Elevated) 'True'
+    $file = Get-GitAsset 'Git'
+    Row 'the installer, fetched and verified' (Test-Path $file) 'True'
+    Remove-Item -Force $file
+    exit $Bad
+    PS
+    } > "$scratch/rows.ps1"
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w "$scratch/rows.ps1")"
+    # A PowerShell that is not elevated: the machine-wide install stops before
+    # it fetches anything, and says what to do. The script's own answer to
+    # the question is replaced by a no, since a runner is elevated.
+    {
+        # shellcheck disable=SC2016 # the script's own line, looked for as it is written
+        sed '/^\$plan = Select-Git /,$d' limen-install.ps1
+        # shellcheck disable=SC2016 # PowerShell's own variables
+        printf '%s\n' 'function Test-Elevated { return $false }' 'Install-SystemGit' 'exit 0'
+    } > "$scratch/plain.ps1"
+    code=0
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w "$scratch/plain.ps1")" > "$scratch/said" 2>&1 || code=$?
+    if [ "$code" != 1 ] || ! grep -qF 'takes an elevated PowerShell' "$scratch/said" || grep -qF 'downloading' "$scratch/said"; then
+        echo "limen-install.ps1: a machine-wide install from a PowerShell that is not elevated ended $code and said:" >&2
+        cat "$scratch/said" >&2
+        exit 1
+    fi
+    echo "limen-install.ps1: which Git a run takes, how a version reads, the installer verified, and no machine-wide install without elevation, ok"
+
+[unix]
+git-plan:
+    @echo "limen-install.ps1: its own functions are run on Windows, under its PowerShell"
 
 # limen-install's write of the pins into the root, which the sessions' tool
 # root reads through links at any hour: `put` and `install_tools`, lifted as

@@ -29,6 +29,28 @@ What it does:
 - **tools**: `hermetic install -a` installs the toolset into the root's store, and the
   root's `bin` gets one link per tool, each a name for `hermetic` itself.
 
+### On Windows
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\limen-install.ps1
+```
+
+The PowerShell script is the one entry point there. It provides Git for Windows, whose
+git-bash everything else runs under, at the release the script pins, then runs
+`./limen-install` under it. Which Git, on every run:
+
+- **none on the machine**: the pinned release is installed machine-wide, with its
+  installer, and marked as the script's (a `.limen-install` file in its directory).
+  That takes an elevated PowerShell (Run as administrator);
+- **the machine's is the script's**: upgraded when it is older than the pin, from an
+  elevated PowerShell too;
+- **the machine's is someone else's**: left as it is. The script keeps a Git of its own,
+  the portable build, under `%LOCALAPPDATA%\limen-install\Git`, at the pin, and runs
+  `./limen-install` under that one.
+
+A Git the script installed before it left that mark reads as someone else's: an empty
+`.limen-install` file in `C:\Program Files\Git` hands it over.
+
 ## The root
 
 The root is `HERMETIC_ROOT_DIR`, or hermetic's default for the platform:
