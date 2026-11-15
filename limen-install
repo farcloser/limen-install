@@ -130,10 +130,15 @@ install_hermetic() {
   log "installing hermetic ${HERMETIC_VERSION} (${asset})"
   local t; t="$(mktemp -d "${TMPDIR:-/tmp}/limen-install.XXXXXX")"
   local base="https://github.com/forkcloser/hermetic/releases/download/${HERMETIC_VERSION}"
-  curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
+  # Every download is bounded: a connection that stalls would otherwise hold
+  # the run for ever, and under launchd a run that never ends is the last one,
+  # since the job is not started again while it is still running.
+  curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 20 --max-time 120 \
+    --retry 5 --retry-delay 3 --retry-all-errors \
     -o "$t/checksums.txt" "$base/checksums.txt"
   verify_sha256 "$t/checksums.txt" "$HERMETIC_CHECKSUMS_SHA256"
-  curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
+  curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 20 --max-time 300 \
+    --retry 5 --retry-delay 3 --retry-all-errors \
     -o "$t/$asset" "$base/$asset"
   local expected
   expected="$(awk -v a="$asset" '$2 == a {print $1}' "$t/checksums.txt")"
@@ -596,7 +601,9 @@ if [ -f "\$log" ] && [ "\$(wc -c < "\$log")" -gt 1048576 ]; then
 fi
 $root_export
 export LIMEN_INSTALL_NIGHTLY=1
-url=\$(curl --proto '=https' --tlsv1.2 -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/farcloser/limen-install/releases/latest)
+url=\$(curl --proto '=https' --tlsv1.2 -fsSLI --connect-timeout 20 --max-time 60 \
+  --retry 5 --retry-delay 3 --retry-all-errors \
+  -o /dev/null -w '%{url_effective}' https://github.com/farcloser/limen-install/releases/latest)
 tag=\${url##*/}
 case "\$tag" in
   v*) ;;
@@ -604,10 +611,19 @@ case "\$tag" in
 esac
 t=\$(mktemp -d "\${TMPDIR:-/tmp}/limen-install.XXXXXX")
 trap 'rm -rf "\$t"' EXIT
-curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o "\$t/limen-install" \
+curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 20 --max-time 120 \
+  --retry 5 --retry-delay 3 --retry-all-errors -o "\$t/limen-install" \
   "https://raw.githubusercontent.com/farcloser/limen-install/\$tag/limen-install"
 echo "limen-install nightly: \$(date -u +%Y-%m-%dT%H:%M:%SZ) running \$tag"
-bash "\$t/limen-install"
+# An hour for the whole run, enforced from outside it: the installer's own
+# downloads are bounded, hermetic's are not, and launchd does not start this
+# job again while an earlier run of it is still there. The alarm outlives the
+# exec and ends bash where it stands; launchd ends what bash had started.
+if command -v perl >/dev/null 2>&1; then
+  perl -e 'alarm shift; exec @ARGV or die "exec: \$!\\n"' 3600 bash "\$t/limen-install"
+else
+  bash "\$t/limen-install"
+fi
 RUNNER
   chmod 755 "$runner"
   mv "$runner" "$NIGHTLY_RUNNER"
