@@ -175,7 +175,7 @@ Before running it, three manual steps:
 Then:
 
 ```bash
-./limen-install-agent <bot-login> <bot-email> <public-key-file>
+./limen-install-agent --org <organization> <bot-login> <bot-email> <public-key-file>
 ```
 
 What it does (idempotent — re-run to converge):
@@ -280,7 +280,22 @@ the bot key's algorithm, the pinned `known_hosts`, strict checking) are
 **the sessions' ssh client options**, `<agent root>/ssh_config`, which the fork's
 `ssh_config` reads first through `Include ${SSH_CONFIG_INCLUDE}`; only the sessions'
 settings `env` sets that variable, so the human's own ssh never reads the file.
-The force-push allow rule is written here: `Bash(git push --force-with-lease=*)`.
+A push is allowed here, before auto mode's classifier sees it: `Bash(git push *)`. The
+rule is on the command's first words and looks at nothing after them, so what it allows
+is any `git push`: to any destination, forced or mirrored, and with an option that runs a
+program (`--receive-pack`), all inside the sandbox and none of it reviewed. It holds only
+for a push that is the whole command: in a chain every part has to be allowed, and no
+rule matches past an environment assignment. There is no rule for `git -C <tree> push`,
+and a session pushes from inside its tree: a `*` ahead of the subcommand stands for any
+option and any subcommand, `-c alias.x='!program' x push` among them, so that shape
+would allow every program, not a push.
+
+`--org NAME`, optional and repeatable, names a GitHub organization or account the
+sessions push to. It bounds nothing in the rule above. The settings tell the classifier
+those repositories are the machine's own source control (`autoMode.environment`, which
+it reads from the user's settings only), for what it still judges: a pull request, a
+push under `git -C`. Like `--write`, the list is the run's: an organization not named
+again is no longer listed.
 
 Remaining, per repository: the bot's line in `.lint-signers`, so
 `just lint`'s commit check verifies its signatures — the script prints it.
