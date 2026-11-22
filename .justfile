@@ -1041,16 +1041,17 @@ merge-settings:
         sed -n '/^PATH="\/usr\/bin:/p' limen-install-agent
         printf 'ok() { :; }\nunset CLAUDE_CONFIG_DIR\nHOME=%q\n' "$home"
         # shellcheck disable=SC2016 # the harness expands these, not this recipe
-        printf '%s\n' 'AGENT_SOCKET="$HOME/agent.sock"' 'AGENT_ROOT="$HOME/.local/share/limen-agent"' 'WRITE=("$HOME/Projects/one" "$HOME/Projects/two words")'
+        printf '%s\n' 'AGENT_SOCKET="$HOME/agent.sock"' 'AGENT_ROOT="$HOME/.local/share/limen-agent"' 'WRITE=("$HOME/Projects/one" "$HOME/Projects/two words")' 'read -r -a ORGS <<< "${TEST_ORGS-one-org other}"'
         awk '/^readonly CLAUDE_HOME=/{block=1} block && !/^readonly /{exit} block' limen-install-agent
         for name in $names; do
             # shellcheck disable=SC2016 # the harness expands it, not this recipe
-            printf ': "${%s=stand-in}"\nreadonly %s\n' "$name" "$name"
+            # declare -p, not ${name=…}: an array with nothing in it is set.
+            printf 'declare -p %s >/dev/null 2>&1 || %s=stand-in\nreadonly %s\n' "$name" "$name" "$name"
         done
         sed -n '/^merge_settings() {$/,/^}$/p' limen-install-agent
         printf 'merge_settings\n'
     } > "$harness"
-    for line in 'PATH="/usr/bin:' 'readonly CLAUDE_HOME=' 'readonly SETTINGS=' 'readonly AGENT_ROOT' 'readonly WRITE' 'merge_settings() {'; do
+    for line in 'PATH="/usr/bin:' 'readonly CLAUDE_HOME=' 'readonly SETTINGS=' 'readonly AGENT_ROOT' 'readonly WRITE' 'readonly ORGS' 'merge_settings() {'; do
         grep -qF -- "$line" "$harness" || { echo "merge-settings: \`$line\` not found in limen-install-agent" >&2; exit 1; }
     done
     check() { # check <fresh|kept>: what the merged file must hold
@@ -1066,7 +1067,10 @@ merge-settings:
         "env.GIT_CONFIG_GLOBAL is the bot's gitconfig": env["GIT_CONFIG_GLOBAL"] == claude + "/gitconfig",
         "env.SSH_AUTH_SOCK is the agent socket": env["SSH_AUTH_SOCK"] == socket,
         "env.HERMETIC_ROOT_DIR is under the agent root": env["HERMETIC_ROOT_DIR"] == root + "/hermetic",
-        "permissions.allow carries the force push": "Bash(git push --force-with-lease=*)" in perms["allow"],
+        "permissions.allow carries the push": "Bash(git push *)" in perms["allow"],
+        "autoMode.environment names the organizations, once, after what was there":
+            merged["autoMode"]["environment"][-1] == "Source control: github.com/one-org, github.com/other and all repos under them"
+            and len([e for e in merged["autoMode"]["environment"] if e.startswith("Source control: github.com/")]) == 1,
         "permissions.deny carries the baseline": {"Read(~/.s*)", "Edit(./.claude/settings.json)"} <= set(perms["deny"]),
         "sandbox.filesystem.allowWrite starts with the --write directories, then the agent root":
             writes[:3] == ["~/Projects/one", "~/Projects/two words", "~/.local/share/limen-agent"],
@@ -1074,6 +1078,8 @@ merge-settings:
         "sandbox.network carries the domain lists": "github.com" in net["allowedDomains"] and "uploads.github.com" in net["deniedDomains"],
         "sandbox.excludedCommands carries farclauder by its absolute path": claude + "/bin/farclauder worktree remove *" in box["excludedCommands"],
     }
+    if mode == "fresh":
+        facts["a list the installer creates keeps the built-in entries"] = merged["autoMode"]["environment"][0] == "$defaults"
     if mode == "kept":
         hooks = json.dumps(merged["hooks"])
         facts.update({
@@ -1082,7 +1088,10 @@ merge-settings:
             "a human's own sandbox entries survive": "example.org" in net["allowedDomains"] and "~/elsewhere" in writes,
             "a human's own hook survives": "keep-me" in hooks,
             "the retired git identity block is gone": not [k for k in env if k.startswith("GIT_CONFIG_") and k != "GIT_CONFIG_GLOBAL"],
-            "the retired `git c` allow rule is gone": "Bash(git c push --force-with-lease=*)" not in perms["allow"],
+            "the retired push rules are gone": not {"Bash(git c push --force-with-lease=*)", "Bash(git push --force-with-lease=*)"} & set(perms["allow"]),
+            "a human's own auto mode entries survive, and their list gains no defaults":
+                merged["autoMode"]["environment"][:1] == ["Organization: mine"] and "$defaults" not in merged["autoMode"]["environment"]
+                and merged["autoMode"].get("allow") == ["$defaults", "mine"],
             "the retired write locations are gone": "~/go" not in writes and not [w for w in writes if w.startswith("/var/folders/")],
             "the retired hook is gone": "allow-sandboxed-bash" not in hooks,
         })
@@ -1100,12 +1109,27 @@ merge-settings:
     }
     twice fresh
     echo "merges: an absent settings file into the sessions' baseline, and a second run rewrites nothing"
+    # A run that names no organization takes the installer's sentence back out
+    # and leaves the rest of the list.
+    TEST_ORGS='' bash "$harness"
+    python3 -I - "$settings" <<'PY'
+    import json, sys
+    with open(sys.argv[1]) as f:
+        environment = json.load(f)["autoMode"]["environment"]
+    if environment != ["$defaults"]:
+        sys.exit("merge-settings: a run with no --org left autoMode.environment as " + json.dumps(environment))
+    PY
+    echo "merges: a run that names no organization, which lists none"
     rm -rf "$home" && mkdir -p "$home/.claude"
     cat > "$settings" <<'JSON'
     {
       "model": "mine",
       "env": {"MINE": "1", "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "user.name", "GIT_CONFIG_VALUE_0": "someone"},
-      "permissions": {"allow": ["Bash(ls *)", "Bash(git c push --force-with-lease=*)"], "deny": ["Read(~/mine)"]},
+      "permissions": {"allow": ["Bash(ls *)", "Bash(git c push --force-with-lease=*)", "Bash(git push --force-with-lease=*)"], "deny": ["Read(~/mine)"]},
+      "autoMode": {
+        "environment": ["Organization: mine", "Source control: github.com/gone and all repos under it"],
+        "allow": ["$defaults", "mine"]
+      },
       "sandbox": {
         "filesystem": {"allowWrite": ["~/elsewhere", "~/go", "/var/folders/xx/T"]},
         "network": {"allowedDomains": ["example.org"]}
@@ -1147,6 +1171,18 @@ merge-settings:
     grep -qF 'is not JSON' "$scratch/err" || { echo "merge-settings: the refusal does not say why:" >&2; cat "$scratch/err" >&2; exit 1; }
     [ ! -e "$settings.new" ] || { echo "merge-settings: a staged settings file was left behind" >&2; exit 1; }
     echo "refuses: a settings file that does not parse, the backup untouched"
+    # --org takes a GitHub login and nothing else: the name goes into a
+    # sentence auto mode's classifier reads, and the run stops before it
+    # writes anything.
+    cp "$settings" "$scratch/unwritten"
+    for bad in 'two words' 'a/b' '-lead' 'trail-' 'x, github.com/elsewhere' 'do--uble'; do
+        if HOME="$home" bash limen-install-agent --org "$bad" login login@example.org "$scratch/no-key" > /dev/null 2> "$scratch/err"; then
+            echo "merge-settings: --org '$bad' was accepted" >&2; exit 1
+        fi
+        grep -qF -- "--org $bad: not a GitHub organization or account name" "$scratch/err" || { echo "merge-settings: --org '$bad' was refused without saying so:" >&2; cat "$scratch/err" >&2; exit 1; }
+    done
+    cmp -s "$settings" "$scratch/unwritten" || { echo "merge-settings: a refused --org wrote the settings file" >&2; exit 1; }
+    echo "refuses: an --org that is not a GitHub login, nothing written"
 
 [windows]
 merge-settings:

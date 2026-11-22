@@ -25,8 +25,9 @@
 # version's files until they are pruned, so nothing breaks in between.
 #
 # Usage:
-#   limen-install-agent [--write DIR]... [--socket PATH] [--agent-root DIR]
-#                       [--no-verify] <login> <email> <public-key-file>
+#   limen-install-agent [--write DIR]... [--org NAME]... [--socket PATH]
+#                       [--agent-root DIR] [--no-verify]
+#                       <login> <email> <public-key-file>
 #
 # The sessions' tool root (--agent-root, default ~/.local/share/limen-agent): a
 # hermetic root of their own, a home for the verifiers, the Go, cargo and XDG
@@ -36,6 +37,11 @@
 # sandbox's write list. The root gets the toolset's pins and nothing per
 # repository: sessions approve policies and install pins themselves.
 # Design: limen's book/identity.md, "The bot's sandbox".
+#
+# --org NAME, repeatable, names a GitHub organization or account whose
+# repositories the sessions push to. The settings tell auto mode's classifier
+# they are the machine's own source control; like --write, the list is the
+# run's: an organization not named again is no longer listed.
 #
 # <public-key-file> is the bot's public key as the agent prints it (taciturn:
 # `taciturn key list --format ssh`), registered on <login> BOTH as an
@@ -64,11 +70,13 @@ AGENT_SOCKET="$HOME/Library/Application Support/taciturn/agent.sock"
 VERIFY=1
 AGENT_ROOT="$HOME/.local/share/limen-agent"
 WRITE=()
+ORGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --socket) AGENT_SOCKET="$2"; shift 2 ;;
     --agent-root) AGENT_ROOT="$2"; shift 2 ;;
     --write) WRITE+=("${2%/}"); shift 2 ;;
+    --org) ORGS+=("$2"); shift 2 ;;
     --no-verify) VERIFY=0; shift ;;
     --) shift; break ;;
     -*) err "unknown option: $1"; exit 2 ;;
@@ -76,10 +84,15 @@ while [ $# -gt 0 ]; do
   esac
 done
 if [ $# -ne 3 ]; then
-  err "usage: limen-install-agent [--write DIR]... [--socket PATH] [--agent-root DIR] [--no-verify] <login> <email> <public-key-file>"
+  err "usage: limen-install-agent [--write DIR]... [--org NAME]... [--socket PATH] [--agent-root DIR] [--no-verify] <login> <email> <public-key-file>"
   exit 2
 fi
 for d in ${WRITE[@]+"${WRITE[@]}"}; do [ -d "$d" ] || { err "--write $d: not a directory"; exit 2; }; done
+# A GitHub login: letters, digits and single hyphens. The name goes into a
+# sentence the classifier reads, so nothing else may ride in on it.
+for o in ${ORGS[@]+"${ORGS[@]}"}; do
+  [[ "$o" =~ ^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$ ]] || { err "--org $o: not a GitHub organization or account name"; exit 2; }
+done
 # Before anything is written: the socket is pinned into the signer wrapper, the ssh
 # command and the sandbox's socket list, so a wrong default (an agent not installed
 # yet) would break signing and pushing in every session. Refuse first.
@@ -96,7 +109,7 @@ esac
 for tool in python3 curl hermetic; do
   command -v "$tool" >/dev/null 2>&1 || { err "$tool is required (the ProxyCommand helper and the settings merge are python3; curl fetches GitHub's host keys; hermetic is the machine toolset: run limen-install first)"; exit 1; }
 done
-readonly AGENT_ROOT WRITE
+readonly AGENT_ROOT WRITE ORGS
 
 # The fork, by real path (header). `hermetic which` reads a checkout's own
 # .hermetic/hermetic.yaml before the toolset's pins in its root: resolved from
@@ -455,8 +468,9 @@ merge_settings() {
   [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
   SOCKET="$AGENT_SOCKET" GITCONFIG_PATH="$GITCONFIG" FARCLAUDER_PATH="$FARCLAUDER" \
   ROOT="$AGENT_ROOT" WRITE_DIRS="$(printf '%s\n' ${WRITE[@]+"${WRITE[@]}"})" USER_HOME="$HOME" \
+  PUSH_ORGS="$(printf '%s\n' ${ORGS[@]+"${ORGS[@]}"})" \
   python3 - "$SETTINGS" <<'PY'
-import json, os, shutil, string, sys
+import json, os, re, shutil, string, sys
 path = sys.argv[1]
 # Read before anything is written: a file that does not parse stops the run
 # with the backup of the last one that did still in place.
@@ -544,13 +558,44 @@ fs["allowWrite"] = writes + [tilde(root)] + [p for p in kept if p not in writes 
 # keeps git away from the human's ~/.gitconfig, a symlink into it. A rule on a
 # letter is future-proof: a directory created tomorrow is denied the day it
 # appears. Paths in ~ form, which the rule engine and the sandbox both expand.
-# The force push's allow rule, a prefix match. The `git c` form was the
-# installer's own and goes with the alias.
+# A push is the sessions' routine and is decided here, before auto mode's
+# classifier sees it: an allow rule resolves first, and the classifier refused
+# reviewed pushes on what the conversation before them looked like. The rule
+# is on the command's first words and nothing else: any `git push`, whatever
+# its destination and options, and only as the whole command (in a chain every
+# part has to be allowed, and no rule matches past an environment assignment).
+# No rule for `git -C <tree> push`: a `*` before the subcommand stands for any
+# option and any subcommand, `-c alias.x=!program x push` among them, so that
+# shape would allow every program; a session pushes from inside its tree. The
+# lease-only rule and the `git c` form were the installer's own and are covered
+# or retired.
 allow = settings.setdefault("permissions", {}).setdefault("allow", [])
-allow[:] = [r for r in allow if r != "Bash(git c push --force-with-lease=*)"]
-for rule in ("Bash(git push --force-with-lease=*)",):
+allow[:] = [r for r in allow if r not in ("Bash(git c push --force-with-lease=*)", "Bash(git push --force-with-lease=*)")]
+for rule in ("Bash(git push *)",):
     if rule not in allow:
         allow.append(rule)
+# What the classifier is told for every other judgment that names those
+# repositories (a pull request, a push under `git -C`): they are this
+# machine's own source control, not an outside destination. It bounds nothing
+# in the rule above, which does not look at where a push goes. It reads this
+# from the user's settings only, as prose. The installer's sentence is
+# recognised by its exact shape and replaced, so the list follows --org; a
+# list it creates keeps the built-in entries, which "$defaults" stands for.
+orgs = [o for o in os.environ["PUSH_ORGS"].split("\n") if o]
+ours = re.compile(r"Source control: github\.com/[A-Za-z0-9-]+(, github\.com/[A-Za-z0-9-]+)* and all repos under (it|them)")
+auto = settings.setdefault("autoMode", {})
+environment = [e for e in auto.get("environment", []) if not (isinstance(e, str) and ours.fullmatch(e))]
+if orgs:
+    if not environment:
+        environment = ["$defaults"]
+    environment.append("Source control: " + ", ".join("github.com/" + o for o in orgs)
+                       + " and all repos under " + ("it" if len(orgs) == 1 else "them"))
+if environment:
+    auto["environment"] = environment
+else:
+    auto.pop("environment", None)
+if not auto:
+    del settings["autoMode"]
 deny = settings.setdefault("permissions", {}).setdefault("deny", [])
 reads = (".Trash", ".a*", ".b*", ".claude.json*", ".codex", ".config", ".d*", ".gemini",
          ".gnupg", ".lima", ".netrc", ".o*", ".p*", ".s*", ".z*",
